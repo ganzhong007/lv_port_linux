@@ -406,7 +406,17 @@ target_include_directories(lvgl_linux PUBLIC
 # Link LVGL with external dependencies - Modern CMake/CMP0079 allows this
 target_link_libraries(lvgl PUBLIC ${PKG_CONFIG_LIB} m pthread rt dl)
 
-add_executable(lvglsim src/main.c)
+add_executable(lvglsim
+    src/main.c
+    src/demos/lvgl_scenario1.c
+    src/demos/lvgl_scenario2.c
+    src/demos/lvgl_verify.c
+)
+
+target_include_directories(lvglsim PRIVATE
+    ${CMAKE_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/lvgl/src
+)
 
 # Repeat lvgl_linux to resolve circular dependency with lvgl
 target_link_libraries(lvglsim lvgl_linux lvgl lvgl_linux)
