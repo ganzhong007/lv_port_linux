@@ -123,21 +123,21 @@ flowchart LR
 
 - 系统打开多个应用；眼镜展示 **最近 9 个** 的应用界面 **缩小图**
 - **背景全透明**（穿透真实世界）
-- **3×3 排列**，三行对应 **近 / 中 / 远** 三个立体深度层（Z 不同 + 可选轻微 scale 差）
+- **3×3 排列**：**从下到上** 三行，对应 **从近到远** 三个立体深度层（Z 不同 + 可选轻微 scale 差；最下一行最大/最近，最上一行最小/最远）
 - **左、右两列外侧** 各露出 **第 10、11 个** 应用的一小条截屏，**Y 轴倾斜**（rotation.y），增强立体感
 - 用户 ** gaze / 触控 / 手势** 选中其一 → **动效过渡** 至该应用 **全屏**；其余缩略图淡出或退远
 
-#### 布局示意（俯视角深度）
+#### 布局示意（屏幕 Y：自下而上 = 由近及远）
 
 ```mermaid
 flowchart TB
-    subgraph depth_far [远层 Z = Z2]
+    subgraph depth_far [远层 Z = Z2 · 屏幕最上行]
         F1["App7"] --- F2["App8"] --- F3["App9"]
     end
-    subgraph depth_mid [中层 Z = Z1]
+    subgraph depth_mid [中层 Z = Z1 · 屏幕中间行]
         M1["App4"] --- M2["App5"] --- M3["App6"]
     end
-    subgraph depth_near [近层 Z = Z0]
+    subgraph depth_near [近层 Z = Z0 · 屏幕最下行]
         N1["App1"] --- N2["App2"] --- N3["App3"]
     end
     PeekL["App10 侧翼\n左倾"] -.-> N1
@@ -231,7 +231,7 @@ void lv_3d_segment_pool_tick(lv_3d_segment_pool_t * pool, float dt);
 |------|--------|--------|---------|
 | **全局 alpha / 穿透** | 必须 | 必须（楼体可半透明） | §0.1、§7 compositor |
 | **2D UI 贴 3D 平面** | 缩略图 | 车道 overlay | §3 路径 A PLANE |
-| **深度分层 / 透视** | 9 宫格近中远 | 楼群 Z 深度 | §4 `lv_3dviewport` + camera |
+| **深度分层 / 透视** | 9 宫格从下到上、近到远 | 楼群 Z 深度 | §4 `lv_3dviewport` + camera |
 | **Transform 动画** | 全屏展开 | 后移 parallax | `lv_anim` + 3D props |
 | **3D pick / 焦点** | 选应用 | 可选 | Phase 2 |
 | **快照缓存降功耗** | 9 路 live UI 太贵 | 楼段 mesh 复用 | Phase 2 Retainer / segment_pool |
@@ -301,7 +301,7 @@ typedef enum {
 |--------|--------|--------|------|
 | 未绘制区 alpha=0 | 必须 | 必须 | 读 back buffer α 通道 |
 | 1080p 静态 idle GPU 调用 ≈0 | GridIdle 态 | 停车态 | trace draw call / 帧跳过计数 |
-| 3D 深度分层可见 | 近中远三行 | 楼群 Z 递进 | 视觉 + depth buffer |
+| 3D 深度分层可见 | 从下到上、近到远三行 | 楼群 Z 递进 | 视觉 + depth buffer |
 | 侧翼倾斜 | ±yaw peek | — | 视觉 |
 | pick 选中 | 射线命中 tile | — | 自动化注入坐标 |
 | 全屏动效 | anim 结束切 APP_FULLSCREEN | — | 状态机断言 |
@@ -1231,6 +1231,7 @@ void lv_3dmesh_set_custom_mesh(lv_obj_t * mesh, const lv_3d_mesh_data_t * data);
 
 | 参数 | 建议值 |
 |------|--------|
+| row 0→2（屏幕 Y） | **最下行→最上行**，对应 **近→远** |
 | row Z | near=-400, mid=-700, far=-1000（单位：场景 mm 或相对单位） |
 | row scale | 1.0 / 0.92 / 0.85 |
 | peek yaw | ±18° |
