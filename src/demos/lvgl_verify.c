@@ -5,8 +5,11 @@
 #include "lvgl/lvgl.h"
 #include "lvgl_demos.h"
 
-#if LV_USE_DRAW_GPU_COMPOSITE
+#if LV_USE_3D && LV_USE_DRAW_GPU_COMPOSITE
 #include "draw/gpu_composite/lv_draw_gpu_composite.h"
+#if LV_USE_SNAPSHOT
+#include "lvgl/3d/lv_3d_plane_bake.h"
+#endif
 #endif
 
 #include <stdio.h>
@@ -19,6 +22,8 @@ static int frames_to_check;
 static int frames_checked;
 static int frames_seen;
 static uint32_t last_verified_serial;
+static float s2_min_z_first;
+static float s2_min_z_last;
 
 #if LV_USE_3D && LV_USE_DRAW_GPU_COMPOSITE
 
@@ -27,6 +32,51 @@ static int env_int(const char * name, int default_val)
     const char * v = getenv(name);
     if(!v || !v[0]) return default_val;
     return atoi(v);
+}
+
+static int env_bool(const char * name, int default_val)
+{
+    const char * v = getenv(name);
+    if(!v || !v[0]) return default_val;
+    return atoi(v) != 0;
+}
+
+static void verify_log_path_stats(const lv_gpu_composite_verify_stats_t * s)
+{
+    if(s->gl_renderer[0]) {
+        printf("LVGL_VERIFY: path renderer=%s gpu2d=%u gpu3d=%u sw_overlay=%u sw_raster=%u\n",
+               s->gl_renderer,
+               (unsigned)s->gpu_2d_tasks,
+               (unsigned)s->gpu_3d_draws,
+               (unsigned)s->sw_overlay_uploads,
+               (unsigned)s->sw_2d_raster_tasks);
+    }
+    else {
+        printf("LVGL_VERIFY: path gpu2d=%u gpu3d=%u sw_overlay=%u sw_raster=%u\n",
+               (unsigned)s->gpu_2d_tasks,
+               (unsigned)s->gpu_3d_draws,
+               (unsigned)s->sw_overlay_uploads,
+               (unsigned)s->sw_2d_raster_tasks);
+    }
+}
+
+static int verify_gpu_path(const lv_gpu_composite_verify_stats_t * s)
+{
+    if(!env_bool("LVGL_VERIFY_GPU_PATH", 0)) return 1;
+
+    if(scenario_id == 2) {
+        if(s->gpu_2d_tasks < 1) {
+            printf("LVGL_VERIFY: FAIL gpu_path scenario=2 gpu_2d_tasks=%u (expect >=1)\n",
+                   (unsigned)s->gpu_2d_tasks);
+            return 0;
+        }
+        if(s->sw_overlay_uploads != 0) {
+            printf("LVGL_VERIFY: FAIL gpu_path scenario=2 sw_overlay_uploads=%u (expect 0)\n",
+                   (unsigned)s->sw_overlay_uploads);
+            return 0;
+        }
+    }
+    return 1;
 }
 
 static int verify_frame_content(int frame_idx, const lv_gpu_composite_verify_stats_t * s)
@@ -130,7 +180,38 @@ static void verify_one_frame(lv_display_t * disp)
         exit(1);
     }
 
+    if(!verify_gpu_path(&stats)) {
+        verify_done = 1;
+        exit(1);
+    }
+
+#if LV_USE_3D_SEGMENT_POOL
+    if(scenario_id == 2) {
+        const float min_z = lvgl_scenario2_get_min_seg_z();
+        if(frames_checked == 0) s2_min_z_first = min_z;
+        s2_min_z_last = min_z;
+    }
+#endif
+
     frames_checked++;
+    verify_log_path_stats(&stats);
+
+#if LV_USE_SNAPSHOT
+    if(scenario_id == 1 && frame_idx == 1 && getenv("LVGL_VERIFY_DUMP")) {
+        const char * dump_dir = getenv("LVGL_VERIFY_DUMP");
+        char frame_path[512];
+        char snap_path[512];
+        lv_snprintf(frame_path, sizeof(frame_path), "%s/frame_lvgl.rgba", dump_dir);
+        lv_snprintf(snap_path, sizeof(snap_path), "%s/snap1_lvgl.rgba", dump_dir);
+        if(lv_gpu_composite_dump_frame_lvgl(disp, frame_path)) {
+            printf("LVGL_VERIFY: dump frame -> %s\n", frame_path);
+        }
+        if(lv_3d_plane_dump_snapshot_lvgl(1, snap_path)) {
+            printf("LVGL_VERIFY: dump snap1 -> %s\n", snap_path);
+        }
+    }
+#endif
+
     printf("LVGL_VERIFY: frame %d/%d ok corner_a=%u max_a=%u flush_max=%u flush_items=%u visible=%u\n",
            frame_idx, frames_to_check,
            (unsigned)stats.corner_min_alpha,
@@ -140,8 +221,24 @@ static void verify_one_frame(lv_display_t * disp)
            (unsigned)stats.region_visible_count);
 
     if(frames_checked >= frames_to_check) {
+#if LV_USE_3D_SEGMENT_POOL
+        if(scenario_id == 2) {
+            const uint32_t recycled = lvgl_scenario2_get_recycle_count();
+            const float dz = s2_min_z_last - s2_min_z_first;
+            if(recycled < 1 && dz < 80.0f) {
+                printf("LVGL_VERIFY: FAIL scenario=2 parallax min_z %.1f -> %.1f (dz=%.1f) recycle=%u\n",
+                       s2_min_z_first, s2_min_z_last, dz, (unsigned)recycled);
+                verify_done = 1;
+                exit(1);
+            }
+            printf("LVGL_VERIFY: scenario2 parallax ok dz=%.1f recycle=%u\n", dz, (unsigned)recycled);
+        }
+#endif
         printf("LVGL_VERIFY: PASS scenario=%d checked_frames=%d seen_frames=%d samples_per_frame=%u\n",
                scenario_id, frames_to_check, frames_seen, (unsigned)stats.region_samples);
+        if(env_bool("LVGL_VERIFY_GPU_PATH", scenario_id == 2 ? 1 : 0)) {
+            printf("LVGL_VERIFY: gpu_path PASS scenario=%d\n", scenario_id);
+        }
         verify_done = 1;
         exit(0);
     }
@@ -166,6 +263,8 @@ int lvgl_verify_run(int id)
     frames_seen = 0;
     frames_checked = 0;
     last_verified_serial = 0;
+    s2_min_z_first = 0.0f;
+    s2_min_z_last = 0.0f;
     warmup_left = env_int("LVGL_VERIFY_WARMUP", 8);
     frames_to_check = env_int("LVGL_VERIFY_FRAMES", 60);
     if(frames_to_check < 1) frames_to_check = 1;

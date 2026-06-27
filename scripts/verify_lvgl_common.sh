@@ -39,12 +39,13 @@ lvgl_verify_run() {
   export LVGL_VERIFY=1
   export LVGL_VERIFY_FRAMES="${LVGL_VERIFY_FRAMES:-60}"
   export LVGL_VERIFY_WARMUP="${LVGL_VERIFY_WARMUP:-8}"
+  export LVGL_VERIFY_GPU_PATH="${LVGL_VERIFY_GPU_PATH:-0}"
   export LV_SIM_WINDOW_WIDTH="${LV_SIM_WINDOW_WIDTH:-1920}"
   export LV_SIM_WINDOW_HEIGHT="${LV_SIM_WINDOW_HEIGHT:-1080}"
 
   local w="${LV_SIM_WINDOW_WIDTH}"
   local h="${LV_SIM_WINDOW_HEIGHT}"
-  local run_cmd=(timeout 45 "$bin" "${backend_args[@]}" -W "$w" -H "$h")
+  local run_cmd=(timeout 180 stdbuf -oL "$bin" "${backend_args[@]}" -W "$w" -H "$h")
 
   echo "verify: backend=$backend scenario=$scenario ${w}x${h} frames=${LVGL_VERIFY_FRAMES} bin=$bin"
 

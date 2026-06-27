@@ -13,8 +13,9 @@
     #define M_PI 3.14159265358979323846
 #endif
 
-#define LVGL_S1_TILE_COUNT 11
+#define LVGL_S1_TILE_COUNT 15
 #define LVGL_S1_ANIM_MS      420
+#define LVGL_S1_GRID_TILES   9
 
 typedef struct {
     lv_obj_t * mesh;
@@ -41,6 +42,8 @@ static const uint32_t tile_colors[LVGL_S1_TILE_COUNT] = {
     0xE53935, 0xFB8C00, 0xFDD835, 0x43A047, 0x1E88E5,
     0x8E24AA, 0x00ACC1, 0x6D4C41, 0x546E7A,
     0x26A69A, 0xEC407A,
+    0xAB47BC, 0x26C6DA,
+    0x5C6BC0, 0xFF7043,
 };
 
 static float ease_out_cubic(float t)
@@ -52,12 +55,10 @@ static float ease_out_cubic(float t)
 static void tile_apply(lvgl_s1_tile_t * t, float x, float y, float z,
                        float yaw_deg, float sx, float sy, float sz, lv_opa_t opa)
 {
-    lv_3d_material_t mat;
-    lv_3d_material_init(&mat, LV_3D_MAT_OPAQUE, t->color, opa);
-    lv_3dmesh_set_material(t->mesh, &mat);
     lv_3dmesh_set_position(t->mesh, x, y, z);
     lv_3dmesh_set_rotation_y(t->mesh, yaw_deg);
     lv_3dmesh_set_scale(t->mesh, sx, sy, sz);
+    lv_3dmesh_set_opa(t->mesh, opa);
 }
 
 static void tile_apply_home(int idx, lv_opa_t opa)
@@ -68,6 +69,21 @@ static void tile_apply_home(int idx, lv_opa_t opa)
                t->home_rot_y,
                t->home_scale[0], t->home_scale[1], t->home_scale[2],
                opa);
+}
+
+static void apply_focused_steady_state(int focused_idx)
+{
+    for(int i = 0; i < LVGL_S1_TILE_COUNT; i++) {
+        if(i == focused_idx) {
+            tile_apply(&g_tiles[i], 0.0f, 0.0f, -220.0f, 0.0f, 3.2f, 3.2f, 3.2f, LV_OPA_COVER);
+        }
+        else {
+            lvgl_s1_tile_t * t = &g_tiles[i];
+            tile_apply(t,
+                       t->home_pos[0], t->home_pos[1], t->home_pos[2] - 520.0f,
+                       t->home_rot_y, 0.0f, 0.0f, 0.0f, LV_OPA_TRANSP);
+        }
+    }
 }
 
 static void anim_timer_cb(lv_timer_t * timer)
@@ -84,6 +100,14 @@ static void anim_timer_cb(lv_timer_t * timer)
             lv_timer_delete(g_anim_timer);
             g_anim_timer = NULL;
         }
+        if(s_anim_target >= 0) {
+            apply_focused_steady_state(s_anim_target);
+        }
+        else {
+            for(int i = 0; i < LVGL_S1_TILE_COUNT; i++) tile_apply_home(i, LV_OPA_COVER);
+        }
+        if(g_vp) lv_obj_invalidate(g_vp);
+        return;
     }
 
     float e = ease_out_cubic(u);
@@ -104,12 +128,13 @@ static void anim_timer_cb(lv_timer_t * timer)
             opa = (lv_opa_t)(s_from_opa[i] + ((int32_t)LV_OPA_COVER - s_from_opa[i]) * e);
         }
         else if(s_anim_target >= 0) {
+            float shrink = 1.0f - e;
             x = s_from_pos[i][0];
             y = s_from_pos[i][1];
             z = s_from_pos[i][2] + (-520.0f) * e;
-            sx = s_from_scale[i][0] * (1.0f - 0.55f * e);
-            sy = s_from_scale[i][1] * (1.0f - 0.55f * e);
-            sz = s_from_scale[i][2] * (1.0f - 0.55f * e);
+            sx = s_from_scale[i][0] * shrink;
+            sy = s_from_scale[i][1] * shrink;
+            sz = s_from_scale[i][2] * shrink;
             yaw = s_from_rot_y[i];
             opa = (lv_opa_t)(s_from_opa[i] * (1.0f - e));
         }
@@ -168,21 +193,53 @@ static void start_anim(int target_idx)
     g_anim_timer = lv_timer_create(anim_timer_cb, 16, NULL);
 }
 
-static int pick_tile_from_screen(int32_t x, int32_t y, int32_t w, int32_t h)
+static int pick_tile_index(int32_t x, int32_t y)
 {
-    if(w < 1 || h < 1) return -1;
+    lv_obj_t * hit = lv_3dviewport_pick_at(g_vp, x, y);
+    if(!hit) return -1;
 
-    if(x < w / 9) return 9;
-    if(x > w * 8 / 9) return 10;
-
-    int col = (x * 3) / w;
-    int row = (y * 3) / h;
-    if(col < 0) col = 0;
-    if(col > 2) col = 2;
-    if(row < 0) row = 0;
-    if(row > 2) row = 2;
-    return row * 3 + col;
+    for(int i = 0; i < LVGL_S1_TILE_COUNT; i++) {
+        if(g_tiles[i].mesh == hit) return i;
+    }
+    return -1;
 }
+
+#if LV_USE_SNAPSHOT
+static lv_obj_t * create_thumb_source(lv_obj_t * parent, const char * title, uint32_t color_hex, int32_t w, int32_t h)
+{
+    lv_obj_t * cont = lv_obj_create(parent);
+    lv_obj_set_size(cont, w, h);
+    lv_obj_remove_flag(cont, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(cont, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_style_bg_color(cont, lv_color_hex(color_hex), 0);
+    lv_obj_set_style_bg_opa(cont, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(cont, 10, 0);
+    lv_obj_set_style_border_color(cont, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_border_width(cont, 2, 0);
+    lv_obj_set_style_border_opa(cont, LV_OPA_60, 0);
+    lv_obj_set_style_pad_all(cont, 6, 0);
+
+    lv_obj_t * lbl = lv_label_create(cont);
+    lv_label_set_text(lbl, title);
+    lv_obj_set_style_text_color(lbl, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_center(lbl);
+    return cont;
+}
+
+static void mesh_apply_plane_thumb(lv_obj_t * mesh, lv_obj_t * thumb_src, float w, float h)
+{
+    lv_3d_snapshot_id_t snap = lv_3d_plane_bake(thumb_src, LV_3D_PLANE_SRC_SNAPSHOT);
+    lv_3dmesh_set_box(mesh, w, h, 4);
+    if(snap != LV_3D_SNAPSHOT_ID_NONE) {
+        lv_3dmesh_set_plane_snapshot(mesh, snap);
+    }
+    else {
+        lv_3d_material_t mat;
+        lv_3d_material_init(&mat, LV_3D_MAT_OPAQUE, lv_color_hex(0x888888), LV_OPA_COVER);
+        lv_3dmesh_set_material(mesh, &mat);
+    }
+}
+#endif
 
 static void vp_click_cb(lv_event_t * e)
 {
@@ -195,9 +252,7 @@ static void vp_click_cb(lv_event_t * e)
     lv_point_t pt;
     lv_indev_get_point(indev, &pt);
 
-    int32_t w = lv_obj_get_width(g_vp);
-    int32_t h = lv_obj_get_height(g_vp);
-    int idx = pick_tile_from_screen(pt.x, pt.y, w, h);
+    int idx = pick_tile_index(pt.x, pt.y);
     if(idx < 0) return;
 
     if(g_focused < 0) {
@@ -213,7 +268,11 @@ static void vp_click_cb(lv_event_t * e)
     }
 }
 
-static void setup_peek_tiles(lv_obj_t * scene, float x_gap, float row_z0)
+static void setup_peek_row_pair(lv_obj_t * scene, float x_gap, float row_y, float row_z,
+                                int left_idx, int right_idx,
+                                const char * title_l, const char * title_r,
+                                uint32_t color_l, uint32_t color_r,
+                                lv_obj_t * thumb_root)
 {
     const float peek_w = 44.0f;
     const float peek_h = 112.0f;
@@ -221,42 +280,56 @@ static void setup_peek_tiles(lv_obj_t * scene, float x_gap, float row_z0)
     const float yaw_deg = 22.0f;
 
     lv_obj_t * peek_l = lv_3dmesh_create(scene);
+#if LV_USE_SNAPSHOT
+    {
+        lv_obj_t * src = create_thumb_source(thumb_root, title_l, color_l, (int32_t)peek_w, (int32_t)peek_h);
+        mesh_apply_plane_thumb(peek_l, src, peek_w, peek_h);
+    }
+#else
     lv_3dmesh_set_box(peek_l, peek_w, peek_h, 8);
     lv_3dmesh_set_wireframe(peek_l, false);
     {
         lv_3d_material_t mat;
-        lv_3d_material_init(&mat, LV_3D_MAT_OPAQUE, lv_color_hex(tile_colors[9]), LV_OPA_COVER);
+        lv_3d_material_init(&mat, LV_3D_MAT_OPAQUE, lv_color_hex(color_l), LV_OPA_COVER);
         lv_3dmesh_set_material(peek_l, &mat);
     }
-    lv_3dmesh_set_position(peek_l, -peek_x, 0.0f, row_z0);
+#endif
+    lv_3dmesh_set_position(peek_l, -peek_x, row_y, row_z);
     lv_3dmesh_set_rotation_y(peek_l, yaw_deg);
     lv_3dmesh_set_scale(peek_l, 0.92f, 0.92f, 0.92f);
-    g_tiles[9].mesh = peek_l;
-    g_tiles[9].color = lv_color_hex(tile_colors[9]);
-    g_tiles[9].home_pos[0] = -peek_x;
-    g_tiles[9].home_pos[1] = 0.0f;
-    g_tiles[9].home_pos[2] = row_z0;
-    g_tiles[9].home_rot_y = yaw_deg;
-    g_tiles[9].home_scale[0] = g_tiles[9].home_scale[1] = g_tiles[9].home_scale[2] = 0.92f;
+    g_tiles[left_idx].mesh = peek_l;
+    g_tiles[left_idx].color = lv_color_hex(color_l);
+    g_tiles[left_idx].home_pos[0] = -peek_x;
+    g_tiles[left_idx].home_pos[1] = row_y;
+    g_tiles[left_idx].home_pos[2] = row_z;
+    g_tiles[left_idx].home_rot_y = yaw_deg;
+    g_tiles[left_idx].home_scale[0] = g_tiles[left_idx].home_scale[1] = g_tiles[left_idx].home_scale[2] = 0.92f;
 
     lv_obj_t * peek_r = lv_3dmesh_create(scene);
+#if LV_USE_SNAPSHOT
+    {
+        lv_obj_t * src = create_thumb_source(thumb_root, title_r, color_r, (int32_t)peek_w, (int32_t)peek_h);
+        mesh_apply_plane_thumb(peek_r, src, peek_w, peek_h);
+    }
+#else
     lv_3dmesh_set_box(peek_r, peek_w, peek_h, 8);
     lv_3dmesh_set_wireframe(peek_r, false);
     {
         lv_3d_material_t mat;
-        lv_3d_material_init(&mat, LV_3D_MAT_OPAQUE, lv_color_hex(tile_colors[10]), LV_OPA_COVER);
+        lv_3d_material_init(&mat, LV_3D_MAT_OPAQUE, lv_color_hex(color_r), LV_OPA_COVER);
         lv_3dmesh_set_material(peek_r, &mat);
     }
-    lv_3dmesh_set_position(peek_r, peek_x, 0.0f, row_z0);
+#endif
+    lv_3dmesh_set_position(peek_r, peek_x, row_y, row_z);
     lv_3dmesh_set_rotation_y(peek_r, -yaw_deg);
     lv_3dmesh_set_scale(peek_r, 0.92f, 0.92f, 0.92f);
-    g_tiles[10].mesh = peek_r;
-    g_tiles[10].color = lv_color_hex(tile_colors[10]);
-    g_tiles[10].home_pos[0] = peek_x;
-    g_tiles[10].home_pos[1] = 0.0f;
-    g_tiles[10].home_pos[2] = row_z0;
-    g_tiles[10].home_rot_y = -yaw_deg;
-    g_tiles[10].home_scale[0] = g_tiles[10].home_scale[1] = g_tiles[10].home_scale[2] = 0.92f;
+    g_tiles[right_idx].mesh = peek_r;
+    g_tiles[right_idx].color = lv_color_hex(color_r);
+    g_tiles[right_idx].home_pos[0] = peek_x;
+    g_tiles[right_idx].home_pos[1] = row_y;
+    g_tiles[right_idx].home_pos[2] = row_z;
+    g_tiles[right_idx].home_rot_y = -yaw_deg;
+    g_tiles[right_idx].home_scale[0] = g_tiles[right_idx].home_scale[1] = g_tiles[right_idx].home_scale[2] = 0.92f;
 }
 
 static void capture_grid_homes(lv_obj_t * stack)
@@ -265,7 +338,7 @@ static void capture_grid_homes(lv_obj_t * stack)
     const float y_gap = 160.0f;
     const float row_z[3] = { -350.0f, -650.0f, -950.0f };
 
-    for(uint32_t i = 0; i < 9; i++) {
+    for(uint32_t i = 0; i < LVGL_S1_GRID_TILES; i++) {
         lv_obj_t * tile = lv_obj_get_child(stack, i);
         uint32_t r = i / 3;
         uint32_t c = i % 3;
@@ -304,18 +377,42 @@ void lvgl_scenario1_launcher_create(void)
     lv_3dstack_set_row_depth(stack, 2, -950);
     lv_3dstack_set_cell_spacing(stack, 220, 160);
 
-    for(int i = 0; i < 9; i++) {
+    lv_obj_t * thumb_root = lv_obj_create(scr);
+    lv_obj_add_flag(thumb_root, LV_OBJ_FLAG_HIDDEN);
+
+    static const char * app_titles[] = {
+        "Maps", "Music", "Photos", "Mail", "Web",
+        "Settings", "Notes", "Weather", "Files",
+    };
+
+    for(int i = 0; i < LVGL_S1_GRID_TILES; i++) {
         lv_obj_t * tile = lv_3dmesh_create(stack);
+#if LV_USE_SNAPSHOT
+        lv_obj_t * src = create_thumb_source(thumb_root, app_titles[i], tile_colors[i], 160, 100);
+        mesh_apply_plane_thumb(tile, src, 160, 100);
+#else
         lv_3dmesh_set_box(tile, 160, 100, 8);
         lv_3dmesh_set_wireframe(tile, false);
         lv_3d_material_t mat;
         lv_3d_material_init(&mat, LV_3D_MAT_OPAQUE, lv_color_hex(tile_colors[i]), LV_OPA_COVER);
         lv_3dmesh_set_material(tile, &mat);
+#endif
     }
 
     lv_3dstack_layout(stack);
     capture_grid_homes(stack);
-    setup_peek_tiles(scene, 220.0f, -350.0f);
+
+    const float x_gap = 220.0f;
+    const float y_gap = 160.0f;
+    const float row_z[3] = { -350.0f, -650.0f, -950.0f };
+
+    /* Rows 1–3: tilted side app previews aligned with each grid row */
+    setup_peek_row_pair(scene, x_gap, -y_gap, row_z[0], 9, 10,
+                        "App L1", "App R1", tile_colors[9], tile_colors[10], thumb_root);
+    setup_peek_row_pair(scene, x_gap, 0.0f, row_z[1], 11, 12,
+                        "App L2", "App R2", tile_colors[11], tile_colors[12], thumb_root);
+    setup_peek_row_pair(scene, x_gap, y_gap, row_z[2], 13, 14,
+                        "App L3", "App R3", tile_colors[13], tile_colors[14], thumb_root);
 
     g_vp = lv_3dviewport_create(scr);
     lv_obj_set_size(g_vp, LV_PCT(100), LV_PCT(100));
