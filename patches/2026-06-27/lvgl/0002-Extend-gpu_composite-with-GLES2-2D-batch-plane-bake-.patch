@@ -1,0 +1,2552 @@
+From 7816675012d6aae66a764dc04a0e1862795d3cfc Mon Sep 17 00:00:00 2001
+From: gz <gz@local>
+Date: Sat, 27 Jun 2026 20:15:22 +0800
+Subject: [PATCH 2/3] Extend gpu_composite with GLES2 2D batch, plane bake, and
+ 3D pick fixes.
+
+Add segment pool, plane snapshot opa in the 3D renderer, viewport ray pick
+with Y correction, and observability hooks for verify tooling.
+---
+ include/lvgl/3d/lv_3d.h                       |   6 +
+ include/lvgl/3d/lv_3d_anim.h                  |  29 +
+ include/lvgl/3d/lv_3d_plane_bake.h            |  46 ++
+ include/lvgl/3d/lv_3d_segment_pool.h          |  49 ++
+ include/lvgl/lvgl.h                           |   7 +
+ include/lvgl/widgets/lv_3dmesh.h              |   7 +
+ include/lvgl/widgets/lv_3dviewport.h          |   5 +-
+ src/3d/lv_3d_anim.c                           | 151 +++++
+ src/3d/lv_3d_internal.h                       |   9 +
+ src/3d/lv_3d_math.c                           | 125 ++++
+ src/3d/lv_3d_pick.c                           |  86 +++
+ src/3d/lv_3d_plane_bake.c                     | 174 ++++++
+ src/3d/lv_3d_scene.c                          |   1 +
+ src/3d/lv_3d_segment_pool.c                   | 142 +++++
+ .../gpu_composite/lv_draw_gpu_composite.c     | 313 ++++++++--
+ .../gpu_composite/lv_draw_gpu_composite.h     |   9 +
+ .../gpu_composite/lv_gpu_composite_gles2_2d.c | 568 ++++++++++++++++++
+ .../gpu_composite/lv_gpu_composite_gles2_2d.h |  51 ++
+ .../gpu_composite/lv_gpu_composite_gles2_3d.c | 139 +++++
+ src/widgets/3d/lv_3dmesh.c                    |  76 ++-
+ src/widgets/3d/lv_3dmesh_private.h            |   1 +
+ src/widgets/3d/lv_3dviewport.c                |  52 ++
+ src/widgets/3d/lv_3dviewport_private.h        |   1 +
+ 23 files changed, 1999 insertions(+), 48 deletions(-)
+ create mode 100644 include/lvgl/3d/lv_3d_anim.h
+ create mode 100644 include/lvgl/3d/lv_3d_plane_bake.h
+ create mode 100644 include/lvgl/3d/lv_3d_segment_pool.h
+ create mode 100644 src/3d/lv_3d_anim.c
+ create mode 100644 src/3d/lv_3d_pick.c
+ create mode 100644 src/3d/lv_3d_plane_bake.c
+ create mode 100644 src/3d/lv_3d_segment_pool.c
+ create mode 100644 src/draw/gpu_composite/lv_gpu_composite_gles2_2d.c
+ create mode 100644 src/draw/gpu_composite/lv_gpu_composite_gles2_2d.h
+
+diff --git a/include/lvgl/3d/lv_3d.h b/include/lvgl/3d/lv_3d.h
+index 75a5cf80b..7e711c7a5 100644
+--- a/include/lvgl/3d/lv_3d.h
++++ b/include/lvgl/3d/lv_3d.h
+@@ -24,6 +24,7 @@ typedef enum {
+     LV_3D_MAT_OPAQUE = 0,
+     LV_3D_MAT_ALPHA,
+     LV_3D_MAT_WIREFRAME,
++    LV_3D_MAT_PLANE_SNAPSHOT,     /* baked 2D subtree texture on 3D quad */
+ } lv_3d_material_kind_t;
+ 
+ typedef struct {
+@@ -32,12 +33,17 @@ typedef struct {
+     lv_opa_t opa;
+ } lv_3d_material_t;
+ 
++typedef uint32_t lv_3d_snapshot_id_t;
++#define LV_3D_SNAPSHOT_ID_NONE 0U
++
+ typedef struct {
+     float x;
+     float y;
+     float z;
+ } lv_vec3_t;
+ 
++typedef lv_vec3_t lv_point3d_t;
++
+ void lv_3d_material_init(lv_3d_material_t * mat, lv_3d_material_kind_t kind, lv_color_t color, lv_opa_t opa);
+ 
+ #endif /*LV_USE_3D*/
+diff --git a/include/lvgl/3d/lv_3d_anim.h b/include/lvgl/3d/lv_3d_anim.h
+new file mode 100644
+index 000000000..53602fb78
+--- /dev/null
++++ b/include/lvgl/3d/lv_3d_anim.h
+@@ -0,0 +1,29 @@
++/**
++ * @file lv_3d_anim.h — 3D mesh property animations
++ */
++
++#ifndef LV_3D_ANIM_H
++#define LV_3D_ANIM_H
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++#include "../config/lv_conf_internal.h"
++
++#if LV_USE_3D && LV_USE_3D_WIDGETS
++
++#include "../core/lv_obj.h"
++
++void lv_anim_3d_position(lv_obj_t * obj, float x, float y, float z, uint32_t ms);
++void lv_anim_3d_rotation(lv_obj_t * obj, float pitch, float yaw, float roll, uint32_t ms);
++void lv_anim_3d_scale(lv_obj_t * obj, float sx, float sy, float sz, uint32_t ms);
++void lv_anim_3d_opa(lv_obj_t * obj, lv_opa_t opa, uint32_t ms);
++
++#endif /*LV_USE_3D && LV_USE_3D_WIDGETS*/
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif /*LV_3D_ANIM_H*/
+diff --git a/include/lvgl/3d/lv_3d_plane_bake.h b/include/lvgl/3d/lv_3d_plane_bake.h
+new file mode 100644
+index 000000000..27136c89e
+--- /dev/null
++++ b/include/lvgl/3d/lv_3d_plane_bake.h
+@@ -0,0 +1,46 @@
++/**
++ * @file lv_3d_plane_bake.h
++ * Bake lv_obj subtrees to GPU textures for 3D PLANE tiles (scenario 1).
++ */
++
++#ifndef LV_3D_PLANE_BAKE_H
++#define LV_3D_PLANE_BAKE_H
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++#include "../config/lv_conf_internal.h"
++
++#if LV_USE_3D && LV_USE_SNAPSHOT
++
++#include "../core/lv_obj.h"
++#include "lv_3d.h"
++
++typedef enum {
++    LV_3D_PLANE_SRC_LIVE,
++    LV_3D_PLANE_SRC_SNAPSHOT,
++} lv_3d_plane_src_t;
++
++/** Bake obj subtree to snapshot; returns id or LV_3D_SNAPSHOT_ID_NONE on failure. */
++lv_3d_snapshot_id_t lv_3d_plane_bake(lv_obj_t * obj, lv_3d_plane_src_t src);
++
++/** Mark snapshot stale so next bake re-renders the subtree. */
++void lv_3d_plane_invalidate(lv_obj_t * obj);
++
++/** Upload pending CPU snapshots to GL (call with GL context current). */
++void lv_3d_plane_upload_all(void);
++
++/** GL texture for rendered snapshot; 0 if not ready. */
++unsigned int lv_3d_plane_get_gl_texture(lv_3d_snapshot_id_t id);
++
++/** Debug: write CPU snapshot as LVGL-order RGBA (header: uint32 w, uint32 h, then BGRA rows). */
++bool lv_3d_plane_dump_snapshot_lvgl(lv_3d_snapshot_id_t id, const char * path);
++
++#endif /*LV_USE_3D && LV_USE_SNAPSHOT*/
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif /*LV_3D_PLANE_BAKE_H*/
+diff --git a/include/lvgl/3d/lv_3d_segment_pool.h b/include/lvgl/3d/lv_3d_segment_pool.h
+new file mode 100644
+index 000000000..20271dc5f
+--- /dev/null
++++ b/include/lvgl/3d/lv_3d_segment_pool.h
+@@ -0,0 +1,49 @@
++/**
++ * @file lv_3d_segment_pool.h
++ * Parallax building segments with spawn/recycle (scenario 2).
++ */
++
++#ifndef LV_3D_SEGMENT_POOL_H
++#define LV_3D_SEGMENT_POOL_H
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++#include "../config/lv_conf_internal.h"
++
++#if LV_USE_3D && LV_USE_3D_SEGMENT_POOL
++
++#include "../core/lv_obj.h"
++
++typedef struct {
++    float segment_length;
++    float scroll_speed;
++    uint16_t pool_size;
++    float recycle_z;
++} lv_3d_segment_pool_cfg_t;
++
++typedef struct _lv_3d_segment_pool_t lv_3d_segment_pool_t;
++
++/** Populate segment_root with lv_3dmesh children at world z around seg_base_z. */
++typedef void (*lv_3d_segment_build_fn_t)(lv_obj_t * segment_root, uint32_t seg_id, float seg_base_z, void * user);
++
++typedef struct {
++    uint32_t recycle_count;
++    float min_seg_z;
++    float max_seg_z;
++} lv_3d_segment_pool_stats_t;
++
++lv_3d_segment_pool_t * lv_3d_segment_pool_create(lv_obj_t * scene, const lv_3d_segment_pool_cfg_t * cfg);
++void lv_3d_segment_pool_delete(lv_3d_segment_pool_t * pool);
++void lv_3d_segment_pool_set_build_fn(lv_3d_segment_pool_t * pool, lv_3d_segment_build_fn_t fn, void * user);
++void lv_3d_segment_pool_tick(lv_3d_segment_pool_t * pool, float dt);
++void lv_3d_segment_pool_get_stats(const lv_3d_segment_pool_t * pool, lv_3d_segment_pool_stats_t * stats);
++
++#endif /*LV_USE_3D && LV_USE_3D_SEGMENT_POOL*/
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif /*LV_3D_SEGMENT_POOL_H*/
+diff --git a/include/lvgl/lvgl.h b/include/lvgl/lvgl.h
+index 20c5a6a52..1c1fc0431 100644
+--- a/include/lvgl/lvgl.h
++++ b/include/lvgl/lvgl.h
+@@ -168,6 +168,13 @@
+ #include "widgets/lv_3dtexture.h"
+ #if LV_USE_3D
+ #include "3d/lv_3d.h"
++#if LV_USE_3D_SEGMENT_POOL
++#include "3d/lv_3d_segment_pool.h"
++#endif
++#if LV_USE_SNAPSHOT
++#include "3d/lv_3d_plane_bake.h"
++#endif
++#include "3d/lv_3d_anim.h"
+ #include "widgets/lv_3dscene.h"
+ #include "widgets/lv_3dcamera.h"
+ #include "widgets/lv_3dviewport.h"
+diff --git a/include/lvgl/widgets/lv_3dmesh.h b/include/lvgl/widgets/lv_3dmesh.h
+index 7e57c4957..b1ce7049b 100644
+--- a/include/lvgl/widgets/lv_3dmesh.h
++++ b/include/lvgl/widgets/lv_3dmesh.h
+@@ -21,9 +21,16 @@ void lv_3dmesh_set_box(lv_obj_t * mesh, float w, float h, float d);
+ void lv_3dmesh_set_wireframe(lv_obj_t * mesh, bool en);
+ void lv_3dmesh_set_color(lv_obj_t * mesh, lv_color_t c);
+ void lv_3dmesh_set_material(lv_obj_t * mesh, const lv_3d_material_t * mat);
++void lv_3dmesh_set_plane_snapshot(lv_obj_t * mesh, lv_3d_snapshot_id_t snapshot_id);
+ void lv_3dmesh_set_position(lv_obj_t * mesh, float x, float y, float z);
++void lv_3dmesh_set_rotation(lv_obj_t * mesh, float pitch_deg, float yaw_deg, float roll_deg);
+ void lv_3dmesh_set_rotation_y(lv_obj_t * mesh, float yaw_deg);
+ void lv_3dmesh_set_scale(lv_obj_t * mesh, float sx, float sy, float sz);
++void lv_3dmesh_set_opa(lv_obj_t * mesh, lv_opa_t opa);
++void lv_3dmesh_get_position(lv_obj_t * mesh, float * x, float * y, float * z);
++void lv_3dmesh_get_rotation(lv_obj_t * mesh, float * pitch_deg, float * yaw_deg, float * roll_deg);
++void lv_3dmesh_get_scale(lv_obj_t * mesh, float * sx, float * sy, float * sz);
++lv_opa_t lv_3dmesh_get_opa(lv_obj_t * mesh);
+ 
+ #endif /*LV_USE_3D && LV_USE_3D_WIDGETS*/
+ 
+diff --git a/include/lvgl/widgets/lv_3dviewport.h b/include/lvgl/widgets/lv_3dviewport.h
+index 135d37d89..470e6c71f 100644
+--- a/include/lvgl/widgets/lv_3dviewport.h
++++ b/include/lvgl/widgets/lv_3dviewport.h
+@@ -13,11 +13,14 @@ extern "C" {
+ 
+ #if LV_USE_3D && LV_USE_3D_WIDGETS
+ 
+-#include "../core/lv_obj.h"
++#include "../3d/lv_3d.h"
+ 
+ lv_obj_t * lv_3dviewport_create(lv_obj_t * parent);
+ void lv_3dviewport_set_camera(lv_obj_t * vp, lv_obj_t * camera);
+ void lv_3dviewport_set_scene(lv_obj_t * vp, lv_obj_t * scene);
++void lv_3dviewport_set_pickable(lv_obj_t * vp, bool en);
++lv_obj_t * lv_3dviewport_pick_obj(lv_obj_t * vp, lv_point3d_t ray_origin, lv_vec3_t ray_dir);
++lv_obj_t * lv_3dviewport_pick_at(lv_obj_t * vp, int32_t x, int32_t y);
+ 
+ #endif
+ 
+diff --git a/src/3d/lv_3d_anim.c b/src/3d/lv_3d_anim.c
+new file mode 100644
+index 000000000..ade58a41c
+--- /dev/null
++++ b/src/3d/lv_3d_anim.c
+@@ -0,0 +1,151 @@
++/**
++ * @file lv_3d_anim.c
++ */
++
++#include "../include/lvgl/3d/lv_3d_anim.h"
++
++#if LV_USE_3D && LV_USE_3D_WIDGETS
++
++#include "../widgets/3d/lv_3dmesh_private.h"
++#include "../include/lvgl/core/lv_anim.h"
++
++#define LV_ANIM_3D_RANGE 1024
++
++#ifndef M_PI
++    #define M_PI 3.14159265358979323846
++#endif
++
++typedef struct {
++    lv_obj_t * mesh;
++    float sx, sy, sz;
++    float ex, ey, ez;
++} lv_anim_3d_pos_ctx_t;
++
++typedef struct {
++    lv_obj_t * mesh;
++    float sp, sy, sr;
++    float ep, ey, er;
++} lv_anim_3d_rot_ctx_t;
++
++typedef struct {
++    lv_obj_t * mesh;
++    float ssx, ssy, ssz;
++    float esx, esy, esz;
++} lv_anim_3d_scale_ctx_t;
++
++typedef struct {
++    lv_obj_t * mesh;
++    lv_opa_t so;
++    lv_opa_t eo;
++} lv_anim_3d_opa_ctx_t;
++
++static float anim_lerp(float a, float b, int32_t v)
++{
++    float t = (float)v / (float)LV_ANIM_3D_RANGE;
++    return a + (b - a) * t;
++}
++
++static void anim_ctx_deleted(lv_anim_t * a)
++{
++    lv_free(a->var);
++}
++
++static void pos_anim_exec(void * var, int32_t v)
++{
++    lv_anim_3d_pos_ctx_t * ctx = var;
++    float x = anim_lerp(ctx->sx, ctx->ex, v);
++    float y = anim_lerp(ctx->sy, ctx->ey, v);
++    float z = anim_lerp(ctx->sz, ctx->ez, v);
++    lv_3dmesh_set_position(ctx->mesh, x, y, z);
++}
++
++static void rot_anim_exec(void * var, int32_t v)
++{
++    lv_anim_3d_rot_ctx_t * ctx = var;
++    float p = anim_lerp(ctx->sp, ctx->ep, v);
++    float y = anim_lerp(ctx->sy, ctx->ey, v);
++    float r = anim_lerp(ctx->sr, ctx->er, v);
++    lv_3dmesh_set_rotation(ctx->mesh, p, y, r);
++}
++
++static void scale_anim_exec(void * var, int32_t v)
++{
++    lv_anim_3d_scale_ctx_t * ctx = var;
++    float sx = anim_lerp(ctx->ssx, ctx->esx, v);
++    float sy = anim_lerp(ctx->ssy, ctx->esy, v);
++    float sz = anim_lerp(ctx->ssz, ctx->esz, v);
++    lv_3dmesh_set_scale(ctx->mesh, sx, sy, sz);
++}
++
++static void opa_anim_exec(void * var, int32_t v)
++{
++    lv_anim_3d_opa_ctx_t * ctx = var;
++    float t = (float)v / (float)LV_ANIM_3D_RANGE;
++    lv_opa_t opa = (lv_opa_t)(ctx->so + (int32_t)((int32_t)ctx->eo - (int32_t)ctx->so) * t);
++    lv_3dmesh_set_opa(ctx->mesh, opa);
++}
++
++static void start_anim(void * ctx, lv_anim_exec_xcb_t exec_cb, uint32_t ms)
++{
++    lv_anim_t a;
++    lv_anim_init(&a);
++    lv_anim_set_var(&a, ctx);
++    lv_anim_set_exec_cb(&a, exec_cb);
++    lv_anim_set_values(&a, 0, LV_ANIM_3D_RANGE);
++    lv_anim_set_duration(&a, ms);
++    lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
++    lv_anim_set_deleted_cb(&a, anim_ctx_deleted);
++    lv_anim_start(&a);
++}
++
++void lv_anim_3d_position(lv_obj_t * obj, float x, float y, float z, uint32_t ms)
++{
++    LV_ASSERT_OBJ(obj, &lv_3dmesh_class);
++    lv_anim_3d_pos_ctx_t * ctx = lv_malloc(sizeof(*ctx));
++    if(!ctx) return;
++    ctx->mesh = obj;
++    lv_3dmesh_get_position(obj, &ctx->sx, &ctx->sy, &ctx->sz);
++    ctx->ex = x;
++    ctx->ey = y;
++    ctx->ez = z;
++    start_anim(ctx, pos_anim_exec, ms);
++}
++
++void lv_anim_3d_rotation(lv_obj_t * obj, float pitch, float yaw, float roll, uint32_t ms)
++{
++    LV_ASSERT_OBJ(obj, &lv_3dmesh_class);
++    lv_anim_3d_rot_ctx_t * ctx = lv_malloc(sizeof(*ctx));
++    if(!ctx) return;
++    ctx->mesh = obj;
++    lv_3dmesh_get_rotation(obj, &ctx->sp, &ctx->sy, &ctx->sr);
++    ctx->ep = pitch;
++    ctx->ey = yaw;
++    ctx->er = roll;
++    start_anim(ctx, rot_anim_exec, ms);
++}
++
++void lv_anim_3d_scale(lv_obj_t * obj, float sx, float sy, float sz, uint32_t ms)
++{
++    LV_ASSERT_OBJ(obj, &lv_3dmesh_class);
++    lv_anim_3d_scale_ctx_t * ctx = lv_malloc(sizeof(*ctx));
++    if(!ctx) return;
++    ctx->mesh = obj;
++    lv_3dmesh_get_scale(obj, &ctx->ssx, &ctx->ssy, &ctx->ssz);
++    ctx->esx = sx;
++    ctx->esy = sy;
++    ctx->esz = sz;
++    start_anim(ctx, scale_anim_exec, ms);
++}
++
++void lv_anim_3d_opa(lv_obj_t * obj, lv_opa_t opa, uint32_t ms)
++{
++    LV_ASSERT_OBJ(obj, &lv_3dmesh_class);
++    lv_anim_3d_opa_ctx_t * ctx = lv_malloc(sizeof(*ctx));
++    if(!ctx) return;
++    ctx->mesh = obj;
++    ctx->so = lv_3dmesh_get_opa(obj);
++    ctx->eo = opa;
++    start_anim(ctx, opa_anim_exec, ms);
++}
++
++#endif /*LV_USE_3D && LV_USE_3D_WIDGETS*/
+diff --git a/src/3d/lv_3d_internal.h b/src/3d/lv_3d_internal.h
+index 33aba6d03..b5d6b100b 100644
+--- a/src/3d/lv_3d_internal.h
++++ b/src/3d/lv_3d_internal.h
+@@ -23,6 +23,7 @@ typedef struct {
+     float w, h, d;
+     bool wireframe;
+     lv_3d_material_t material;
++    lv_3d_snapshot_id_t snapshot_id;
+     lv_3d_transform_t transform;
+     lv_obj_t * obj;
+ } lv_3d_draw_item_t;
+@@ -34,6 +35,12 @@ void lv_3d_mat4_scale(float m[16], float sx, float sy, float sz);
+ void lv_3d_mat4_rotate_y(float m[16], float rad);
+ void lv_3d_mat4_perspective(float m[16], float fov_deg, float aspect, float near_z, float far_z);
+ void lv_3d_mat4_look_at(float m[16], lv_vec3_t eye, lv_vec3_t target, lv_vec3_t up);
++bool lv_3d_mat4_invert(float out[16], const float m[16]);
++void lv_3d_mat4_transform_point(const float m[16], lv_vec3_t in, lv_vec3_t * out);
++void lv_3d_mat4_transform_dir(const float m[16], lv_vec3_t in, lv_vec3_t * out);
++void lv_3d_ray_from_screen(int32_t x, int32_t y, int32_t w, int32_t h,
++                           const float view[16], const float proj[16],
++                           lv_vec3_t * origin, lv_vec3_t * dir);
+ 
+ void lv_3d_transform_init(lv_3d_transform_t * t);
+ void lv_3d_transform_set_local_trs(lv_3d_transform_t * t, float tx, float ty, float tz,
+@@ -48,6 +55,8 @@ void lv_3d_camera_get_view_proj(lv_obj_t * cam, int32_t vp_w, int32_t vp_h, floa
+ 
+ uint32_t lv_3d_scene_collect(lv_obj_t * scene, lv_3d_draw_item_t * out, uint32_t max_out);
+ 
++lv_obj_t * lv_3d_pick_scene(lv_obj_t * scene, lv_vec3_t origin, lv_vec3_t dir);
++
+ #endif /*LV_USE_3D*/
+ 
+ #endif /*LV_3D_INTERNAL_H*/
+diff --git a/src/3d/lv_3d_math.c b/src/3d/lv_3d_math.c
+index 03a26f14b..a5b2fb636 100644
+--- a/src/3d/lv_3d_math.c
++++ b/src/3d/lv_3d_math.c
+@@ -7,6 +7,7 @@
+ #if LV_USE_3D
+ 
+ #include <math.h>
++#include <float.h>
+ 
+ #ifndef M_PI
+     #define M_PI 3.14159265358979323846
+@@ -91,4 +92,128 @@ void lv_3d_mat4_look_at(float m[16], lv_vec3_t eye, lv_vec3_t target, lv_vec3_t
+     m[14] = (f.x * eye.x + f.y * eye.y + f.z * eye.z);
+ }
+ 
++bool lv_3d_mat4_invert(float out[16], const float m[16])
++{
++    float inv[16];
++    inv[0] = m[5] * m[10] * m[15] - m[5] * m[11] * m[14] - m[9] * m[6] * m[15] + m[9] * m[7] * m[14] + m[13] * m[6] * m[11] -
++             m[13] * m[7] * m[10];
++    inv[4] = -m[4] * m[10] * m[15] + m[4] * m[11] * m[14] + m[8] * m[6] * m[15] - m[8] * m[7] * m[14] - m[12] * m[6] * m[11] +
++             m[12] * m[7] * m[10];
++    inv[8] = m[4] * m[9] * m[15] - m[4] * m[11] * m[13] - m[8] * m[5] * m[15] + m[8] * m[7] * m[13] + m[12] * m[5] * m[11] -
++             m[12] * m[7] * m[9];
++    inv[12] = -m[4] * m[9] * m[14] + m[4] * m[10] * m[13] + m[8] * m[5] * m[14] - m[8] * m[6] * m[13] - m[12] * m[5] * m[10] +
++              m[12] * m[6] * m[9];
++    inv[1] = -m[1] * m[10] * m[15] + m[1] * m[11] * m[14] + m[9] * m[2] * m[15] - m[9] * m[3] * m[14] - m[13] * m[2] * m[11] +
++             m[13] * m[3] * m[10];
++    inv[5] = m[0] * m[10] * m[15] - m[0] * m[11] * m[14] - m[8] * m[2] * m[15] + m[8] * m[3] * m[14] + m[12] * m[2] * m[11] -
++             m[12] * m[3] * m[10];
++    inv[9] = -m[0] * m[9] * m[15] + m[0] * m[11] * m[13] + m[8] * m[1] * m[15] - m[8] * m[3] * m[13] - m[12] * m[1] * m[11] +
++             m[12] * m[3] * m[9];
++    inv[13] = m[0] * m[9] * m[14] - m[0] * m[10] * m[13] - m[8] * m[1] * m[14] + m[8] * m[2] * m[13] + m[12] * m[1] * m[10] -
++              m[12] * m[2] * m[9];
++    inv[2] = m[1] * m[6] * m[15] - m[1] * m[7] * m[14] - m[5] * m[2] * m[15] + m[5] * m[3] * m[14] + m[13] * m[2] * m[7] -
++             m[13] * m[3] * m[6];
++    inv[6] = -m[0] * m[6] * m[15] + m[0] * m[7] * m[14] + m[4] * m[2] * m[15] - m[4] * m[3] * m[14] - m[12] * m[2] * m[7] +
++             m[12] * m[3] * m[6];
++    inv[10] = m[0] * m[5] * m[15] - m[0] * m[7] * m[13] - m[4] * m[1] * m[15] + m[4] * m[3] * m[13] + m[12] * m[1] * m[7] -
++              m[12] * m[3] * m[5];
++    inv[14] = -m[0] * m[5] * m[14] + m[0] * m[6] * m[13] + m[4] * m[1] * m[14] - m[4] * m[2] * m[13] - m[12] * m[1] * m[6] +
++              m[12] * m[2] * m[5];
++    inv[3] = -m[1] * m[6] * m[11] + m[1] * m[7] * m[10] + m[5] * m[2] * m[11] - m[5] * m[3] * m[10] - m[9] * m[2] * m[7] +
++             m[9] * m[3] * m[6];
++    inv[7] = m[0] * m[6] * m[11] - m[0] * m[7] * m[10] - m[4] * m[2] * m[11] + m[4] * m[3] * m[10] + m[8] * m[2] * m[7] -
++             m[8] * m[3] * m[6];
++    inv[11] = -m[0] * m[5] * m[11] + m[0] * m[7] * m[9] + m[4] * m[1] * m[11] - m[4] * m[3] * m[9] - m[8] * m[1] * m[7] +
++              m[8] * m[3] * m[5];
++    inv[15] = m[0] * m[5] * m[10] - m[0] * m[6] * m[9] - m[4] * m[1] * m[10] + m[4] * m[2] * m[9] + m[8] * m[1] * m[6] -
++              m[8] * m[2] * m[5];
++
++    float det = m[0] * inv[0] + m[1] * inv[4] + m[2] * inv[8] + m[3] * inv[12];
++    if(fabsf(det) < 1e-8f) return false;
++
++    det = 1.0f / det;
++    for(int i = 0; i < 16; i++) out[i] = inv[i] * det;
++    return true;
++}
++
++void lv_3d_mat4_transform_point(const float m[16], lv_vec3_t in, lv_vec3_t * out)
++{
++    float x = m[0] * in.x + m[4] * in.y + m[8] * in.z + m[12];
++    float y = m[1] * in.x + m[5] * in.y + m[9] * in.z + m[13];
++    float z = m[2] * in.x + m[6] * in.y + m[10] * in.z + m[14];
++    float w = m[3] * in.x + m[7] * in.y + m[11] * in.z + m[15];
++    if(fabsf(w) > 1e-8f) {
++        out->x = x / w;
++        out->y = y / w;
++        out->z = z / w;
++    }
++    else {
++        out->x = x;
++        out->y = y;
++        out->z = z;
++    }
++}
++
++void lv_3d_mat4_transform_dir(const float m[16], lv_vec3_t in, lv_vec3_t * out)
++{
++    out->x = m[0] * in.x + m[4] * in.y + m[8] * in.z;
++    out->y = m[1] * in.x + m[5] * in.y + m[9] * in.z;
++    out->z = m[2] * in.x + m[6] * in.y + m[10] * in.z;
++}
++
++static void unproject_ndc(const float inv_vp[16], float ndc_x, float ndc_y, float ndc_z, lv_vec3_t * out)
++{
++    float x = inv_vp[0] * ndc_x + inv_vp[4] * ndc_y + inv_vp[8] * ndc_z + inv_vp[12];
++    float y = inv_vp[1] * ndc_x + inv_vp[5] * ndc_y + inv_vp[9] * ndc_z + inv_vp[13];
++    float z = inv_vp[2] * ndc_x + inv_vp[6] * ndc_y + inv_vp[10] * ndc_z + inv_vp[14];
++    float w = inv_vp[3] * ndc_x + inv_vp[7] * ndc_y + inv_vp[11] * ndc_z + inv_vp[15];
++    if(fabsf(w) > 1e-8f) {
++        out->x = x / w;
++        out->y = y / w;
++        out->z = z / w;
++    }
++    else {
++        out->x = x;
++        out->y = y;
++        out->z = z;
++    }
++}
++
++void lv_3d_ray_from_screen(int32_t x, int32_t y, int32_t w, int32_t h,
++                           const float view[16], const float proj[16],
++                           lv_vec3_t * origin, lv_vec3_t * dir)
++{
++    float vp[16], inv_vp[16];
++    lv_3d_mat4_mul(vp, proj, view);
++    if(!lv_3d_mat4_invert(inv_vp, vp)) {
++        origin->x = origin->y = origin->z = 0.0f;
++        dir->x = dir->y = 0.0f;
++        dir->z = -1.0f;
++        return;
++    }
++
++    if(w < 1) w = 1;
++    if(h < 1) h = 1;
++
++    float ndc_x = 2.0f * ((float)x + 0.5f) / (float)w - 1.0f;
++    float ndc_y = 1.0f - 2.0f * ((float)y + 0.5f) / (float)h;
++
++    lv_vec3_t near_p, far_p;
++    unproject_ndc(inv_vp, ndc_x, ndc_y, -1.0f, &near_p);
++    unproject_ndc(inv_vp, ndc_x, ndc_y, 1.0f, &far_p);
++
++    origin->x = near_p.x;
++    origin->y = near_p.y;
++    origin->z = near_p.z;
++    dir->x = far_p.x - near_p.x;
++    dir->y = far_p.y - near_p.y;
++    dir->z = far_p.z - near_p.z;
++    float dl = sqrtf(dir->x * dir->x + dir->y * dir->y + dir->z * dir->z);
++    if(dl > 1e-8f) {
++        dir->x /= dl;
++        dir->y /= dl;
++        dir->z /= dl;
++    }
++}
++
+ #endif /*LV_USE_3D*/
+diff --git a/src/3d/lv_3d_pick.c b/src/3d/lv_3d_pick.c
+new file mode 100644
+index 000000000..da06c8c59
+--- /dev/null
++++ b/src/3d/lv_3d_pick.c
+@@ -0,0 +1,86 @@
++/**
++ * @file lv_3d_pick.c — viewport ray pick against mesh AABBs
++ */
++
++#include "lv_3d_internal.h"
++
++#if LV_USE_3D
++
++#include <float.h>
++#include <math.h>
++
++static bool ray_aabb_local(float ox, float oy, float oz,
++                           float dx, float dy, float dz,
++                           float hx, float hy, float hz, float * t_out)
++{
++    float tmin = 0.0f;
++    float tmax = FLT_MAX;
++    const float o[3] = { ox, oy, oz };
++    const float d[3] = { dx, dy, dz };
++    const float bmin[3] = { -hx, -hy, -hz };
++    const float bmax[3] = { hx, hy, hz };
++
++    for(int i = 0; i < 3; i++) {
++        if(fabsf(d[i]) < 1e-8f) {
++            if(o[i] < bmin[i] || o[i] > bmax[i]) return false;
++        }
++        else {
++            float t1 = (bmin[i] - o[i]) / d[i];
++            float t2 = (bmax[i] - o[i]) / d[i];
++            if(t1 > t2) {
++                float tmp = t1;
++                t1 = t2;
++                t2 = tmp;
++            }
++            if(t1 > tmin) tmin = t1;
++            if(t2 < tmax) tmax = t2;
++            if(tmin > tmax) return false;
++        }
++    }
++
++    if(tmax < 0.0f) return false;
++    *t_out = tmin >= 0.0f ? tmin : tmax;
++    return true;
++}
++
++static bool ray_hit_mesh(const lv_3d_draw_item_t * it, lv_vec3_t origin, lv_vec3_t dir, float * t_out)
++{
++    float inv_world[16];
++    if(!lv_3d_mat4_invert(inv_world, it->transform.world)) return false;
++
++    lv_vec3_t lo, ld;
++    lv_3d_mat4_transform_point(inv_world, origin, &lo);
++    lv_3d_mat4_transform_dir(inv_world, dir, &ld);
++    float dl = sqrtf(ld.x * ld.x + ld.y * ld.y + ld.z * ld.z);
++    if(dl > 1e-8f) {
++        ld.x /= dl;
++        ld.y /= dl;
++        ld.z /= dl;
++    }
++
++    float hx = it->w * 0.5f;
++    float hy = it->h * 0.5f;
++    float hz = it->d * 0.5f;
++    return ray_aabb_local(lo.x, lo.y, lo.z, ld.x, ld.y, ld.z, hx, hy, hz, t_out);
++}
++
++lv_obj_t * lv_3d_pick_scene(lv_obj_t * scene, lv_vec3_t origin, lv_vec3_t dir)
++{
++    if(!scene) return NULL;
++
++    lv_3d_draw_item_t items[LV_3D_MAX_DRAW_ITEMS];
++    uint32_t n = lv_3d_scene_collect(scene, items, LV_3D_MAX_DRAW_ITEMS);
++
++    float best_t = FLT_MAX;
++    lv_obj_t * best = NULL;
++    for(uint32_t i = 0; i < n; i++) {
++        float t;
++        if(ray_hit_mesh(&items[i], origin, dir, &t) && t >= 0.0f && t < best_t) {
++            best_t = t;
++            best = items[i].obj;
++        }
++    }
++    return best;
++}
++
++#endif /*LV_USE_3D*/
+diff --git a/src/3d/lv_3d_plane_bake.c b/src/3d/lv_3d_plane_bake.c
+new file mode 100644
+index 000000000..a53012770
+--- /dev/null
++++ b/src/3d/lv_3d_plane_bake.c
+@@ -0,0 +1,174 @@
++/**
++ * @file lv_3d_plane_bake.c
++ */
++
++#include "../include/lvgl/3d/lv_3d_plane_bake.h"
++
++#if LV_USE_3D && LV_USE_SNAPSHOT
++
++#include "../include/lvgl/draw/lv_snapshot.h"
++#include "../drivers/opengles/lv_opengles_debug.h"
++#include "../drivers/opengles/lv_opengles_private.h"
++#include "../misc/lv_color.h"
++#include <stdio.h>
++
++#define LV_3D_SNAPSHOT_POOL_SIZE 32
++
++typedef struct {
++    bool used;
++    lv_obj_t * source;
++    lv_3d_plane_src_t src;
++    bool invalidated;
++    lv_draw_buf_t * buf;
++    unsigned int tex_id;
++    bool tex_uploaded;
++} lv_3d_snapshot_slot_t;
++
++static lv_3d_snapshot_slot_t snapshot_pool[LV_3D_SNAPSHOT_POOL_SIZE];
++
++static lv_3d_snapshot_slot_t * slot_by_id(lv_3d_snapshot_id_t id)
++{
++    if(id == 0 || id >= LV_3D_SNAPSHOT_POOL_SIZE) return NULL;
++    if(!snapshot_pool[id].used) return NULL;
++    return &snapshot_pool[id];
++}
++
++static lv_3d_snapshot_slot_t * slot_by_source(lv_obj_t * obj)
++{
++    for(uint32_t i = 1; i < LV_3D_SNAPSHOT_POOL_SIZE; i++) {
++        if(snapshot_pool[i].used && snapshot_pool[i].source == obj) return &snapshot_pool[i];
++    }
++    return NULL;
++}
++
++static lv_3d_snapshot_id_t slot_alloc(lv_obj_t * obj, lv_3d_plane_src_t src)
++{
++    lv_3d_snapshot_slot_t * existing = slot_by_source(obj);
++    if(existing) return (lv_3d_snapshot_id_t)(existing - snapshot_pool);
++
++    for(uint32_t i = 1; i < LV_3D_SNAPSHOT_POOL_SIZE; i++) {
++        if(!snapshot_pool[i].used) {
++            snapshot_pool[i].used = true;
++            snapshot_pool[i].source = obj;
++            snapshot_pool[i].src = src;
++            snapshot_pool[i].invalidated = true;
++            snapshot_pool[i].buf = NULL;
++            snapshot_pool[i].tex_id = 0;
++            snapshot_pool[i].tex_uploaded = false;
++            return (lv_3d_snapshot_id_t)i;
++        }
++    }
++    return LV_3D_SNAPSHOT_ID_NONE;
++}
++
++static bool slot_refresh(lv_3d_snapshot_slot_t * slot)
++{
++    if(!slot || !slot->source) return false;
++    if(slot->src == LV_3D_PLANE_SRC_SNAPSHOT && slot->buf && !slot->invalidated) return true;
++
++    lv_draw_buf_t * snap = lv_snapshot_take(slot->source, LV_COLOR_FORMAT_ARGB8888);
++    if(!snap) return false;
++
++    if(slot->buf) lv_draw_buf_destroy(slot->buf);
++    slot->buf = snap;
++    slot->invalidated = false;
++    slot->tex_uploaded = false;
++    return true;
++}
++
++static void slot_upload_gl(lv_3d_snapshot_slot_t * slot)
++{
++    if(!slot || !slot->buf || slot->tex_uploaded) return;
++
++    const int32_t w = slot->buf->header.w;
++    const int32_t h = slot->buf->header.h;
++    if(w <= 0 || h <= 0) return;
++
++    if(slot->tex_id == 0) {
++        GL_CALL(glGenTextures(1, &slot->tex_id));
++    }
++
++    const uint32_t stride = slot->buf->header.stride;
++    GL_CALL(glBindTexture(GL_TEXTURE_2D, slot->tex_id));
++    GL_CALL(glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR));
++    GL_CALL(glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR));
++    GL_CALL(glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE));
++    GL_CALL(glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE));
++    GL_CALL(glPixelStorei(GL_UNPACK_ALIGNMENT, 1));
++    GL_CALL(glPixelStorei(GL_UNPACK_ROW_LENGTH, stride / 4));
++    GL_CALL(glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_BGRA, GL_UNSIGNED_BYTE, slot->buf->data));
++    GL_CALL(glBindTexture(GL_TEXTURE_2D, 0));
++    GL_CALL(glPixelStorei(GL_UNPACK_ROW_LENGTH, 0));
++    slot->tex_uploaded = true;
++}
++
++lv_3d_snapshot_id_t lv_3d_plane_bake(lv_obj_t * obj, lv_3d_plane_src_t src)
++{
++    if(!obj) return LV_3D_SNAPSHOT_ID_NONE;
++
++    lv_3d_snapshot_id_t id = slot_alloc(obj, src);
++    lv_3d_snapshot_slot_t * slot = slot_by_id(id);
++    if(!slot) return LV_3D_SNAPSHOT_ID_NONE;
++
++    slot->src = src;
++    if(!slot_refresh(slot)) return LV_3D_SNAPSHOT_ID_NONE;
++    return id;
++}
++
++void lv_3d_plane_invalidate(lv_obj_t * obj)
++{
++    lv_3d_snapshot_slot_t * slot = slot_by_source(obj);
++    if(!slot) return;
++    slot->invalidated = true;
++    slot->tex_uploaded = false;
++}
++
++void lv_3d_plane_upload_all(void)
++{
++    for(uint32_t i = 1; i < LV_3D_SNAPSHOT_POOL_SIZE; i++) {
++        if(snapshot_pool[i].used && snapshot_pool[i].buf && !snapshot_pool[i].tex_uploaded) {
++            slot_upload_gl(&snapshot_pool[i]);
++        }
++    }
++}
++
++unsigned int lv_3d_plane_get_gl_texture(lv_3d_snapshot_id_t id)
++{
++    lv_3d_snapshot_slot_t * slot = slot_by_id(id);
++    if(!slot || !slot->tex_uploaded) return 0;
++    return slot->tex_id;
++}
++
++bool lv_3d_plane_dump_snapshot_lvgl(lv_3d_snapshot_id_t id, const char * path)
++{
++    if(!path) return false;
++    lv_3d_snapshot_slot_t * slot = slot_by_id(id);
++    if(!slot || !slot->buf || !slot->buf->data) return false;
++
++    const int32_t w = slot->buf->header.w;
++    const int32_t h = slot->buf->header.h;
++    if(w < 1 || h < 1) return false;
++
++    FILE * f = fopen(path, "wb");
++    if(!f) return false;
++
++    uint32_t wh[2] = { (uint32_t)w, (uint32_t)h };
++    if(fwrite(wh, 1, sizeof(wh), f) != sizeof(wh)) {
++        fclose(f);
++        return false;
++    }
++
++    const uint32_t stride = slot->buf->header.stride;
++    for(int32_t y = 0; y < h; y++) {
++        const uint8_t * row = slot->buf->data + (uint32_t)y * stride;
++        if(fwrite(row, 1, (size_t)w * 4, f) != (size_t)w * 4) {
++            fclose(f);
++            return false;
++        }
++    }
++
++    fclose(f);
++    return true;
++}
++
++#endif /*LV_USE_3D && LV_USE_SNAPSHOT*/
+diff --git a/src/3d/lv_3d_scene.c b/src/3d/lv_3d_scene.c
+index 61f52c25d..40b850a1e 100644
+--- a/src/3d/lv_3d_scene.c
++++ b/src/3d/lv_3d_scene.c
+@@ -24,6 +24,7 @@ static void collect_obj(lv_obj_t * obj, const float parent_world[16], lv_3d_draw
+                                               mesh->scale[0], mesh->scale[1], mesh->scale[2]);
+                 lv_3d_transform_update_world(&item->transform, parent_world);
+                 item->material = mesh->material;
++                item->snapshot_id = mesh->snapshot_id;
+                 item->wireframe = (mesh->material.kind == LV_3D_MAT_WIREFRAME);
+                 item->obj = child;
+                 lv_memcpy(&out[*count], item, sizeof(*item));
+diff --git a/src/3d/lv_3d_segment_pool.c b/src/3d/lv_3d_segment_pool.c
+new file mode 100644
+index 000000000..bda25f1cd
+--- /dev/null
++++ b/src/3d/lv_3d_segment_pool.c
+@@ -0,0 +1,142 @@
++/**
++ * @file lv_3d_segment_pool.c
++ */
++
++#include "../include/lvgl/3d/lv_3d_segment_pool.h"
++
++#if LV_USE_3D && LV_USE_3D_SEGMENT_POOL
++
++#include "../widgets/3d/lv_3dmesh_private.h"
++
++#define LV_3D_SEGMENT_POOL_MAX_SLOTS 24
++
++typedef struct {
++    uint32_t seg_id;
++    float base_z;
++    lv_obj_t * root;
++} lv_3d_segment_slot_t;
++
++struct _lv_3d_segment_pool_t {
++    lv_obj_t * scene;
++    lv_3d_segment_pool_cfg_t cfg;
++    lv_3d_segment_build_fn_t build_fn;
++    void * user_data;
++    lv_3d_segment_slot_t slots[LV_3D_SEGMENT_POOL_MAX_SLOTS];
++    uint16_t slot_count;
++    uint32_t recycle_count;
++    uint32_t next_seg_id;
++};
++
++static void segment_rebuild(lv_3d_segment_pool_t * pool, lv_3d_segment_slot_t * slot)
++{
++    if(!slot->root || !pool->build_fn) return;
++    lv_obj_clean(slot->root);
++    pool->build_fn(slot->root, slot->seg_id, slot->base_z, pool->user_data);
++}
++
++static void segment_shift_meshes(lv_3d_segment_pool_t * pool, lv_3d_segment_slot_t * slot, float dz)
++{
++    LV_UNUSED(pool);
++    if(!slot->root) return;
++
++    uint32_t n = lv_obj_get_child_count(slot->root);
++    for(uint32_t i = 0; i < n; i++) {
++        lv_obj_t * child = lv_obj_get_child(slot->root, i);
++        if(!lv_obj_check_type(child, &lv_3dmesh_class)) continue;
++        lv_3dmesh_t * mesh = (lv_3dmesh_t *)child;
++        lv_3dmesh_set_position(child, mesh->pos[0], mesh->pos[1], mesh->pos[2] + dz);
++    }
++}
++
++static float segment_min_base_z(const lv_3d_segment_pool_t * pool)
++{
++    float min_z = 1.0e9f;
++    for(uint16_t i = 0; i < pool->slot_count; i++) {
++        if(pool->slots[i].base_z < min_z) min_z = pool->slots[i].base_z;
++    }
++    return min_z;
++}
++
++lv_3d_segment_pool_t * lv_3d_segment_pool_create(lv_obj_t * scene, const lv_3d_segment_pool_cfg_t * cfg)
++{
++    if(!scene || !cfg || cfg->pool_size == 0) return NULL;
++    if(cfg->pool_size > LV_3D_SEGMENT_POOL_MAX_SLOTS) return NULL;
++
++    lv_3d_segment_pool_t * pool = lv_malloc_zeroed(sizeof(*pool));
++    if(!pool) return NULL;
++
++    pool->scene = scene;
++    pool->cfg = *cfg;
++    if(pool->cfg.recycle_z == 0.0f) pool->cfg.recycle_z = 1400.0f;
++    pool->slot_count = cfg->pool_size;
++
++    for(uint16_t i = 0; i < pool->slot_count; i++) {
++        lv_3d_segment_slot_t * slot = &pool->slots[i];
++        slot->seg_id = pool->next_seg_id++;
++        slot->base_z = -200.0f - (float)i * pool->cfg.segment_length;
++        slot->root = lv_obj_create(scene);
++        lv_obj_remove_flag(slot->root, LV_OBJ_FLAG_SCROLLABLE);
++        lv_obj_remove_style_all(slot->root);
++        lv_obj_add_flag(slot->root, LV_OBJ_FLAG_HIDDEN);
++    }
++
++    return pool;
++}
++
++void lv_3d_segment_pool_delete(lv_3d_segment_pool_t * pool)
++{
++    if(!pool) return;
++    for(uint16_t i = 0; i < pool->slot_count; i++) {
++        if(pool->slots[i].root) lv_obj_delete(pool->slots[i].root);
++    }
++    lv_free(pool);
++}
++
++void lv_3d_segment_pool_set_build_fn(lv_3d_segment_pool_t * pool, lv_3d_segment_build_fn_t fn, void * user)
++{
++    if(!pool) return;
++    pool->build_fn = fn;
++    pool->user_data = user;
++    for(uint16_t i = 0; i < pool->slot_count; i++) {
++        segment_rebuild(pool, &pool->slots[i]);
++    }
++}
++
++void lv_3d_segment_pool_tick(lv_3d_segment_pool_t * pool, float dt)
++{
++    if(!pool || dt <= 0.0f) return;
++
++    /* +Z scroll: buildings ahead move toward camera then recycle behind = forward nav. */
++    const float dz = pool->cfg.scroll_speed * dt;
++
++    for(uint16_t i = 0; i < pool->slot_count; i++) {
++        lv_3d_segment_slot_t * slot = &pool->slots[i];
++        slot->base_z += dz;
++        segment_shift_meshes(pool, slot, dz);
++
++        if(slot->base_z > pool->cfg.recycle_z) {
++            const float min_z = segment_min_base_z(pool);
++            slot->base_z = min_z - pool->cfg.segment_length;
++            slot->seg_id = pool->next_seg_id++;
++            segment_rebuild(pool, slot);
++            pool->recycle_count++;
++        }
++    }
++
++    lv_obj_invalidate(pool->scene);
++}
++
++void lv_3d_segment_pool_get_stats(const lv_3d_segment_pool_t * pool, lv_3d_segment_pool_stats_t * stats)
++{
++    if(!pool || !stats) return;
++    stats->recycle_count = pool->recycle_count;
++    stats->min_seg_z = 1.0e9f;
++    stats->max_seg_z = -1.0e9f;
++    for(uint16_t i = 0; i < pool->slot_count; i++) {
++        float z = pool->slots[i].base_z;
++        if(z < stats->min_seg_z) stats->min_seg_z = z;
++        if(z > stats->max_seg_z) stats->max_seg_z = z;
++    }
++}
++
++#endif /*LV_USE_3D && LV_USE_3D_SEGMENT_POOL*/
+diff --git a/src/draw/gpu_composite/lv_draw_gpu_composite.c b/src/draw/gpu_composite/lv_draw_gpu_composite.c
+index 943430f39..c36ad0f4f 100644
+--- a/src/draw/gpu_composite/lv_draw_gpu_composite.c
++++ b/src/draw/gpu_composite/lv_draw_gpu_composite.c
+@@ -12,18 +12,22 @@
+ 
+ #include "lv_gpu_composite_caps.h"
+ #include "lv_gpu_composite_gles2_3d.h"
++#include "lv_gpu_composite_gles2_2d.h"
+ #include "../lv_draw_private.h"
++#include "../../include/lvgl/draw/lv_draw_label.h"
++#include "../../include/lvgl/draw/lv_draw_image.h"
++#include "../../include/lvgl/draw/lv_draw_rect.h"
+ #include "../../core/lv_refr_private.h"
+ #include "../../display/lv_display_private.h"
+ #include "../../drivers/opengles/lv_opengles_debug.h"
+ #include "../../drivers/opengles/lv_opengles_driver.h"
+ #include "../../drivers/opengles/lv_opengles_private.h"
+ #include "../../drivers/opengles/lv_opengles_texture_private.h"
+-#include "../../misc/lv_area.h"
+ #include "../../misc/lv_color.h"
+ #include "../../include/lvgl/draw/lv_draw_3d.h"
+ #include "../../3d/lv_3d_internal.h"
+ #include "../../widgets/3d/lv_3dviewport_private.h"
++#include <stdio.h>
+ 
+ #define DRAW_UNIT_ID_GPU_COMPOSITE 11
+ #define LV_GPU_COMPOSITE_MAX_VP 8
+@@ -52,6 +56,17 @@ static uint32_t g_last_flush_vp_count;
+ static uint8_t g_last_frame_max_alpha;
+ static uint32_t g_flush_serial;
+ 
++typedef struct {
++    uint32_t gpu_2d_tasks;
++    uint32_t gpu_3d_draws;
++    uint32_t sw_overlay_uploads;
++    uint32_t sw_2d_raster_tasks;
++    char gl_renderer[128];
++} lv_gpu_composite_path_frame_t;
++
++static lv_gpu_composite_path_frame_t g_path_stats;
++static bool g_gl_renderer_logged;
++
+ static int32_t gpu_composite_evaluate(lv_draw_unit_t * draw_unit, lv_draw_task_t * task);
+ static int32_t gpu_composite_dispatch(lv_draw_unit_t * draw_unit, lv_layer_t * layer);
+ static void gpu_composite_flush_internal(unsigned int tex_id, int32_t dw, int32_t dh);
+@@ -71,13 +86,106 @@ void lv_draw_gpu_composite_deinit(void)
+ #if LV_USE_3D
+     lv_gpu_composite_gles2_3d_deinit();
+ #endif
++    lv_gpu_composite_gles2_2d_deinit();
+     g_unit = NULL;
+ }
+ 
++static void path_stats_cache_gl_renderer(void)
++{
++    if(g_path_stats.gl_renderer[0]) return;
++    const char * r = (const char *)glGetString(GL_RENDERER);
++    if(r) {
++        lv_strncpy(g_path_stats.gl_renderer, r, sizeof(g_path_stats.gl_renderer) - 1);
++        g_path_stats.gl_renderer[sizeof(g_path_stats.gl_renderer) - 1] = '\0';
++    }
++}
++
++static bool gpu2d_is_display_fb_layer(const lv_layer_t * layer)
++{
++    lv_display_t * disp = lv_refr_get_disp_refreshing();
++    if(!disp || !layer || !layer->draw_buf) return false;
++
++    lv_opengles_texture_t * tex = lv_display_get_driver_data(disp);
++    if(!tex || !tex->fb1) return false;
++
++    return layer->draw_buf->data == tex->fb1;
++}
++
++static bool gpu2d_can_claim(lv_draw_task_t * task)
++{
++    if(lv_gpu_composite_gles2_2d_is_raster_nest()) return false;
++    if(lv_refr_get_disp_refreshing() == NULL) return false;
++    if(!gpu2d_is_display_fb_layer(task->target_layer)) return false;
++
++    switch(task->type) {
++        case LV_DRAW_TASK_TYPE_FILL: {
++            lv_draw_fill_dsc_t * fd = lv_draw_task_get_fill_dsc(task);
++            return fd && fd->grad.dir == LV_GRAD_DIR_NONE;
++        }
++        case LV_DRAW_TASK_TYPE_BORDER: {
++            lv_draw_border_dsc_t * bd = lv_draw_task_get_border_dsc(task);
++            return bd && bd->width > 0;
++        }
++        case LV_DRAW_TASK_TYPE_LABEL: {
++            lv_draw_label_dsc_t * ld = lv_draw_task_get_label_dsc(task);
++            return ld && ld->rotation == 0;
++        }
++        case LV_DRAW_TASK_TYPE_LETTER: {
++            lv_draw_letter_dsc_t * ld = (lv_draw_letter_dsc_t *)task->draw_dsc;
++            return ld && ld->rotation == 0;
++        }
++        case LV_DRAW_TASK_TYPE_IMAGE: {
++            lv_draw_image_dsc_t * id = lv_draw_task_get_image_dsc(task);
++            return id && id->rotation == 0 && id->scale_x == LV_SCALE_NONE && id->scale_y == LV_SCALE_NONE
++                   && id->skew_x == 0 && id->skew_y == 0 && id->blend_mode == LV_BLEND_MODE_NORMAL;
++        }
++        default:
++            return false;
++    }
++}
++
++static bool gpu2d_queue_task(lv_draw_task_t * t)
++{
++    switch(t->type) {
++        case LV_DRAW_TASK_TYPE_FILL: {
++            lv_draw_fill_dsc_t * fd = lv_draw_task_get_fill_dsc(t);
++            if(!fd) return false;
++            return lv_gpu_composite_gles2_2d_queue_fill(&t->area, &t->clip_area, fd->color, fd->opa, fd->radius);
++        }
++        case LV_DRAW_TASK_TYPE_BORDER: {
++            lv_draw_border_dsc_t * bd = lv_draw_task_get_border_dsc(t);
++            if(!bd) return false;
++            return lv_gpu_composite_gles2_2d_queue_border(&t->area, &t->clip_area, bd->color, bd->opa, bd->width,
++                                                          bd->radius, bd->side);
++        }
++        case LV_DRAW_TASK_TYPE_LABEL: {
++            lv_draw_label_dsc_t * ld = lv_draw_task_get_label_dsc(t);
++            if(!ld) return false;
++            return lv_gpu_composite_gles2_2d_queue_label(&t->area, &t->clip_area, ld);
++        }
++        case LV_DRAW_TASK_TYPE_LETTER: {
++            lv_draw_letter_dsc_t * ld = (lv_draw_letter_dsc_t *)t->draw_dsc;
++            if(!ld) return false;
++            return lv_gpu_composite_gles2_2d_queue_letter(&t->area, &t->clip_area, ld);
++        }
++        case LV_DRAW_TASK_TYPE_IMAGE: {
++            lv_draw_image_dsc_t * id = lv_draw_task_get_image_dsc(t);
++            if(!id) return false;
++            return lv_gpu_composite_gles2_2d_queue_image(&t->area, &t->clip_area, id);
++        }
++        default:
++            return false;
++    }
++}
++
+ static void gpu_composite_flush_internal(unsigned int tex_id, int32_t dw, int32_t dh)
+ {
+     if(!g_unit || tex_id == 0) return;
+ 
++#if LV_USE_3D && LV_USE_SNAPSHOT
++#include "../../include/lvgl/3d/lv_3d_plane_bake.h"
++#endif
++
+     if(vp_queue_count > 0) {
+         vp_persist_count = vp_queue_count;
+         for(uint32_t i = 0; i < vp_queue_count; i++) {
+@@ -86,13 +194,24 @@ static void gpu_composite_flush_internal(unsigned int tex_id, int32_t dw, int32_
+     }
+ 
+     uint32_t count = vp_persist_count;
+-    if(count == 0) return;
++    uint32_t q2d = lv_gpu_composite_gles2_2d_queue_count();
++    if(tex_id == 0 || (count == 0 && q2d == 0)) return;
++
++    path_stats_cache_gl_renderer();
++    g_path_stats.gpu_3d_draws = 0;
++    g_path_stats.gpu_2d_tasks = 0;
++    g_path_stats.sw_2d_raster_tasks = 0;
++    g_path_stats.sw_overlay_uploads = 0;
+ 
+     g_last_flush_tex_id = tex_id;
+     g_last_flush_vp_count = count;
+     g_last_flush_item_count = 0;
+     g_last_frame_max_alpha = 0;
+ 
++#if LV_USE_3D && LV_USE_SNAPSHOT
++    lv_3d_plane_upload_all();
++#endif
++
+ #if !LV_USE_EGL
+     GL_CALL(glBindVertexArray(0));
+     GL_CALL(glBindBuffer(GL_ARRAY_BUFFER, 0));
+@@ -103,33 +222,44 @@ static void gpu_composite_flush_internal(unsigned int tex_id, int32_t dw, int32_
+ #endif
+ 
+     unsigned int depth_rb = 0;
+-    GL_CALL(glGenRenderbuffers(1, &depth_rb));
+-    GL_CALL(glBindRenderbuffer(GL_RENDERBUFFER, depth_rb));
+-    GL_CALL(glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT16, dw, dh));
+-
+-    for(uint32_t v = 0; v < count; v++) {
+-        lv_gpu_composite_vp_t * vp = &vp_persist[v];
+-        lv_3d_draw_item_t items[LV_3D_MAX_DRAW_ITEMS];
+-        uint32_t n = lv_3d_scene_collect(vp->scene, items, LV_3D_MAX_DRAW_ITEMS);
+-
+-        float view[16], proj[16];
+-        lv_3d_camera_get_view_proj(vp->camera, dw, dh, view, proj);
+-
+-        int32_t vx = vp->area.x1;
+-        int32_t vy = dh - vp->area.y2 - 1;
+-        int32_t vw = lv_area_get_width(&vp->area);
+-        int32_t vh = lv_area_get_height(&vp->area);
+-
+-        uint8_t vp_max_a = 0;
+-        lv_gpu_composite_gles2_render_viewport(tex_id, depth_rb, vx, vy, vw, vh,
+-                                               view, proj, items, n,
+-                                               LV_GPU_COMPOSITE_AR_PASSTHROUGH, &vp_max_a);
+-        if(vp_max_a > g_last_frame_max_alpha) g_last_frame_max_alpha = vp_max_a;
+-        g_last_flush_item_count += n;
+-    }
++    if(count > 0) {
++        GL_CALL(glGenRenderbuffers(1, &depth_rb));
++        GL_CALL(glBindRenderbuffer(GL_RENDERBUFFER, depth_rb));
++        GL_CALL(glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT16, dw, dh));
++
++        for(uint32_t v = 0; v < count; v++) {
++            lv_gpu_composite_vp_t * vp = &vp_persist[v];
++            lv_3d_draw_item_t items[LV_3D_MAX_DRAW_ITEMS];
++            uint32_t n = lv_3d_scene_collect(vp->scene, items, LV_3D_MAX_DRAW_ITEMS);
++
++            float view[16], proj[16];
++            lv_3d_camera_get_view_proj(vp->camera, dw, dh, view, proj);
++
++            int32_t vx = vp->area.x1;
++            int32_t vy = dh - vp->area.y2 - 1;
++            int32_t vw = lv_area_get_width(&vp->area);
++            int32_t vh = lv_area_get_height(&vp->area);
++
++            uint8_t vp_max_a = 0;
++            lv_gpu_composite_gles2_render_viewport(tex_id, depth_rb, vx, vy, vw, vh,
++                                                   view, proj, items, n,
++                                                   LV_GPU_COMPOSITE_AR_PASSTHROUGH, &vp_max_a);
++            if(vp_max_a > g_last_frame_max_alpha) g_last_frame_max_alpha = vp_max_a;
++            g_last_flush_item_count += n;
++        }
+ 
+-    GL_CALL(glDeleteRenderbuffers(1, &depth_rb));
++        GL_CALL(glDeleteRenderbuffers(1, &depth_rb));
++    }
+     vp_queue_count = 0;
++
++    if(q2d > 0) {
++        uint32_t sw_raster = 0;
++        g_path_stats.gpu_2d_tasks = lv_gpu_composite_gles2_2d_render_batch(tex_id, dw, dh, &sw_raster);
++        g_path_stats.sw_2d_raster_tasks = sw_raster;
++        lv_gpu_composite_gles2_2d_queue_reset();
++    }
++
++    g_path_stats.gpu_3d_draws = g_last_flush_item_count;
+     GL_CALL(glFinish());
+     g_flush_serial++;
+ }
+@@ -239,12 +369,16 @@ void lv_gpu_composite_overlay_2d_screen(lv_display_t * disp, int32_t w, int32_t
+     LV_UNUSED(h);
+     return;
+ #else
++    if(g_path_stats.gpu_2d_tasks > 0) return;
++
+     lv_opengles_texture_t * texture = lv_display_get_driver_data(disp);
+     if(!texture || !texture->fb1 || w < 1 || h < 1) return;
+ 
+     unsigned int sw_tex = 0;
+     if(!overlay_upload_sw_tex(texture, disp, w, h, &sw_tex)) return;
+ 
++    g_path_stats.sw_overlay_uploads++;
++
+     GL_CALL(glBindFramebuffer(GL_FRAMEBUFFER, 0));
+ #if !LV_USE_EGL
+     {
+@@ -274,9 +408,14 @@ void lv_gpu_composite_overlay_2d_to_tex(lv_display_t * disp, unsigned int tex_id
+ #if LV_COLOR_DEPTH != 32
+     return;
+ #else
++    /* M1: skip full-screen SW upload when 2D overlay was composited on GPU */
++    if(g_path_stats.gpu_2d_tasks > 0) return;
++
+     unsigned int sw_tex = 0;
+     if(!overlay_upload_sw_tex(texture, disp, w, h, &sw_tex)) return;
+ 
++    g_path_stats.sw_overlay_uploads++;
++
+     unsigned int fbo = 0;
+     GL_CALL(glGenFramebuffers(1, &fbo));
+     GL_CALL(glBindFramebuffer(GL_FRAMEBUFFER, fbo));
+@@ -400,12 +539,76 @@ bool lv_gpu_composite_verify_stats(lv_display_t * disp, lv_gpu_composite_verify_
+     stats->last_flush_viewports = g_last_flush_vp_count;
+     stats->flush_max_alpha = g_last_frame_max_alpha;
+     stats->flush_serial = g_flush_serial;
++    stats->gpu_2d_tasks = g_path_stats.gpu_2d_tasks;
++    stats->gpu_3d_draws = g_path_stats.gpu_3d_draws;
++    stats->sw_overlay_uploads = g_path_stats.sw_overlay_uploads;
++    stats->sw_2d_raster_tasks = g_path_stats.sw_2d_raster_tasks;
++    lv_strncpy(stats->gl_renderer, g_path_stats.gl_renderer, sizeof(stats->gl_renderer) - 1);
++    stats->gl_renderer[sizeof(stats->gl_renderer) - 1] = '\0';
+     if(stats->region_max_alpha < stats->flush_max_alpha) {
+         stats->region_max_alpha = stats->flush_max_alpha;
+     }
+     return true;
+ }
+ 
++bool lv_gpu_composite_dump_frame_lvgl(lv_display_t * disp, const char * path)
++{
++    if(!path || !disp) return false;
++
++    int32_t w, h;
++    unsigned int fbo = verify_bind_tex_fbo(disp, &w, &h);
++    if(!fbo || w < 1 || h < 1) return false;
++
++    FILE * f = fopen(path, "wb");
++    if(!f) {
++        verify_unbind_fbo(fbo);
++        return false;
++    }
++
++    uint32_t wh[2] = { (uint32_t)w, (uint32_t)h };
++    if(fwrite(wh, 1, sizeof(wh), f) != sizeof(wh)) {
++        fclose(f);
++        verify_unbind_fbo(fbo);
++        return false;
++    }
++
++    uint8_t * row = lv_malloc((size_t)w * 4);
++    if(!row) {
++        fclose(f);
++        verify_unbind_fbo(fbo);
++        return false;
++    }
++
++    uint8_t * gl_buf = lv_malloc((size_t)w * h * 4);
++    if(!gl_buf) {
++        lv_free(row);
++        fclose(f);
++        verify_unbind_fbo(fbo);
++        return false;
++    }
++
++    GL_CALL(glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, gl_buf));
++    for(int32_t lv_y = 0; lv_y < h; lv_y++) {
++        const int32_t gl_y = h - 1 - lv_y;
++        lv_memcpy(row, gl_buf + (uint32_t)gl_y * (uint32_t)w * 4, (size_t)w * 4);
++        if(fwrite(row, 1, (size_t)w * 4, f) != (size_t)w * 4) {
++            lv_free(gl_buf);
++            lv_free(row);
++            fclose(f);
++            verify_unbind_fbo(fbo);
++            return false;
++        }
++    }
++
++    lv_free(gl_buf);
++
++    lv_free(row);
++    fclose(f);
++    GL_CALL(glFinish());
++    verify_unbind_fbo(fbo);
++    return true;
++}
++
+ static int32_t gpu_composite_evaluate(lv_draw_unit_t * draw_unit, lv_draw_task_t * task)
+ {
+     LV_UNUSED(draw_unit);
+@@ -415,6 +618,10 @@ static int32_t gpu_composite_evaluate(lv_draw_unit_t * draw_unit, lv_draw_task_t
+         task->preference_score = 0;
+         task->preferred_draw_unit_id = DRAW_UNIT_ID_GPU_COMPOSITE;
+     }
++    else if(gpu2d_can_claim(task)) {
++        task->preference_score = 0;
++        task->preferred_draw_unit_id = DRAW_UNIT_ID_GPU_COMPOSITE;
++    }
+     return 0;
+ }
+ 
+@@ -427,31 +634,39 @@ static int32_t gpu_composite_dispatch(lv_draw_unit_t * draw_unit, lv_layer_t * l
+     if(t == NULL) return LV_DRAW_UNIT_IDLE;
+     if(t->preferred_draw_unit_id != DRAW_UNIT_ID_GPU_COMPOSITE) return LV_DRAW_UNIT_IDLE;
+ 
+-    lv_draw_3d_dsc_t * dsc = lv_draw_task_get_3d_dsc(t);
+-    if(!dsc) return LV_DRAW_UNIT_IDLE;
++    if(t->type == LV_DRAW_TASK_TYPE_3D) {
++        lv_draw_3d_dsc_t * dsc = lv_draw_task_get_3d_dsc(t);
++        if(!dsc) return LV_DRAW_UNIT_IDLE;
+ 
+ #if LV_USE_3D
+-    if(dsc->kind == LV_3D_DRAW_KIND_VIEWPORT_PASS && dsc->scene && dsc->camera) {
+-        if(vp_queue_count < LV_GPU_COMPOSITE_MAX_VP) {
+-            bool dup = false;
+-            for(uint32_t qi = 0; qi < vp_queue_count; qi++) {
+-                lv_gpu_composite_vp_t * q = &vp_queue[qi];
+-                if(q->scene == dsc->scene && q->camera == dsc->camera
+-                   && q->area.x1 == dsc->viewport_area.x1 && q->area.y1 == dsc->viewport_area.y1
+-                   && q->area.x2 == dsc->viewport_area.x2 && q->area.y2 == dsc->viewport_area.y2) {
+-                    dup = true;
+-                    break;
++        if(dsc->kind == LV_3D_DRAW_KIND_VIEWPORT_PASS && dsc->scene && dsc->camera) {
++            if(vp_queue_count < LV_GPU_COMPOSITE_MAX_VP) {
++                bool dup = false;
++                for(uint32_t qi = 0; qi < vp_queue_count; qi++) {
++                    lv_gpu_composite_vp_t * q = &vp_queue[qi];
++                    if(q->scene == dsc->scene && q->camera == dsc->camera
++                       && q->area.x1 == dsc->viewport_area.x1 && q->area.y1 == dsc->viewport_area.y1
++                       && q->area.x2 == dsc->viewport_area.x2 && q->area.y2 == dsc->viewport_area.y2) {
++                        dup = true;
++                        break;
++                    }
++                }
++                if(!dup) {
++                    vp_queue[vp_queue_count].scene = dsc->scene;
++                    vp_queue[vp_queue_count].camera = dsc->camera;
++                    vp_queue[vp_queue_count].area = dsc->viewport_area;
++                    vp_queue_count++;
+                 }
+-            }
+-            if(!dup) {
+-                vp_queue[vp_queue_count].scene = dsc->scene;
+-                vp_queue[vp_queue_count].camera = dsc->camera;
+-                vp_queue[vp_queue_count].area = dsc->viewport_area;
+-                vp_queue_count++;
+             }
+         }
+-    }
+ #endif
++    }
++    else if(gpu2d_can_claim(t)) {
++        if(!gpu2d_queue_task(t)) return LV_DRAW_UNIT_IDLE;
++    }
++    else {
++        return LV_DRAW_UNIT_IDLE;
++    }
+ 
+     t->state = LV_DRAW_TASK_STATE_IN_PROGRESS;
+     u->task_act = t;
+@@ -466,6 +681,12 @@ void lv_gpu_composite_caps_probe_on_context(void)
+     if(g_unit) {
+         lv_gpu_composite_caps_probe(&g_unit->caps);
+         lv_gpu_composite_caps_log(&g_unit->caps);
++        path_stats_cache_gl_renderer();
++        if(!g_gl_renderer_logged && g_path_stats.gl_renderer[0]) {
++            LV_LOG_USER("LVGL GL_RENDERER: %s", g_path_stats.gl_renderer);
++            g_gl_renderer_logged = true;
++        }
++        lv_gpu_composite_gles2_2d_init();
+ #if LV_USE_3D
+         lv_gpu_composite_gles2_3d_init();
+ #endif
+diff --git a/src/draw/gpu_composite/lv_draw_gpu_composite.h b/src/draw/gpu_composite/lv_draw_gpu_composite.h
+index 163a0b54c..b6dbb5265 100644
+--- a/src/draw/gpu_composite/lv_draw_gpu_composite.h
++++ b/src/draw/gpu_composite/lv_draw_gpu_composite.h
+@@ -45,11 +45,20 @@ typedef struct {
+     uint32_t last_flush_items;       /**< meshes rendered in last 3D flush */
+     uint32_t last_flush_viewports;   /**< viewports in last 3D flush */
+     uint32_t flush_serial;           /**< incremented on each successful 3D flush */
++    /** M0 path observability (last completed frame) */
++    uint32_t gpu_2d_tasks;
++    uint32_t gpu_3d_draws;
++    uint32_t sw_overlay_uploads;
++    uint32_t sw_2d_raster_tasks;
++    char gl_renderer[128];
+ } lv_gpu_composite_verify_stats_t;
+ 
+ /** Corner alpha + center-region content sampling for LVGL_VERIFY. */
+ bool lv_gpu_composite_verify_stats(lv_display_t * disp, lv_gpu_composite_verify_stats_t * stats);
+ 
++/** Debug: dump composite texture in LVGL row order (header: uint32 w, h, then RGBA rows). */
++bool lv_gpu_composite_dump_frame_lvgl(lv_display_t * disp, const char * path);
++
+ typedef void (*lv_gpu_composite_frame_cb_t)(lv_display_t * disp);
+ void lv_gpu_composite_set_frame_ready_cb(lv_gpu_composite_frame_cb_t cb);
+ void lv_gpu_composite_notify_frame_ready(lv_display_t * disp);
+diff --git a/src/draw/gpu_composite/lv_gpu_composite_gles2_2d.c b/src/draw/gpu_composite/lv_gpu_composite_gles2_2d.c
+new file mode 100644
+index 000000000..f3a46a8a1
+--- /dev/null
++++ b/src/draw/gpu_composite/lv_gpu_composite_gles2_2d.c
+@@ -0,0 +1,568 @@
++/**
++ * @file lv_gpu_composite_gles2_2d.c — GLES2 2D overlay batch [GL2]
++ */
++
++#include "lv_gpu_composite_gles2_2d.h"
++
++#if LV_USE_DRAW_GPU_COMPOSITE
++
++#include "../../draw/sw/lv_draw_sw.h"
++#include "../lv_draw_private.h"
++#include "../../core/lv_refr_private.h"
++#include "../../display/lv_display_private.h"
++#include "../../drivers/opengles/lv_opengles_debug.h"
++#include "../../drivers/opengles/lv_opengles_private.h"
++#include "../../include/lvgl/draw/lv_draw_label.h"
++#include "../../include/lvgl/draw/lv_draw_image.h"
++#include "../../include/lvgl/draw/lv_draw_rect.h"
++#include "../../misc/lv_color.h"
++#include "../../misc/lv_area_private.h"
++#include <math.h>
++#include <string.h>
++
++#define LV_GPU2D_QUEUE_MAX 512
++
++typedef enum {
++    LV_GPU2D_CMD_FILL = 0,
++    LV_GPU2D_CMD_BORDER,
++    LV_GPU2D_CMD_LABEL,
++    LV_GPU2D_CMD_LETTER,
++    LV_GPU2D_CMD_IMAGE,
++} lv_gpu2d_cmd_type_t;
++
++typedef struct {
++    lv_gpu2d_cmd_type_t type;
++    lv_area_t area;
++    lv_area_t clip;
++    union {
++        struct {
++            lv_color_t color;
++            lv_opa_t opa;
++            int32_t radius;
++        } fill;
++        struct {
++            lv_color_t color;
++            lv_opa_t opa;
++            int32_t width;
++            int32_t radius;
++            lv_border_side_t side;
++        } border;
++        lv_draw_label_dsc_t label;
++        lv_draw_letter_dsc_t letter;
++        lv_draw_image_dsc_t image;
++    } u;
++} lv_gpu2d_cmd_t;
++
++static lv_gpu2d_cmd_t g_queue[LV_GPU2D_QUEUE_MAX];
++static uint32_t g_queue_count;
++static uint32_t g_raster_nest;
++
++static unsigned int prog_fill;
++static int loc_fill_disp;
++static int loc_fill_color;
++static int loc_fill_rect;
++static int loc_fill_radius;
++
++static unsigned int prog_tex;
++static int loc_tex_disp;
++static int loc_tex_sampler;
++
++static lv_draw_buf_t g_raster_buf;
++
++static bool shader_ok(unsigned int sh)
++{
++    int ok = 0;
++    GL_CALL(glGetShaderiv(sh, GL_COMPILE_STATUS, &ok));
++    return ok != 0;
++}
++
++static unsigned int compile_shader(unsigned int type, const char * src)
++{
++    unsigned int sh = glCreateShader(type);
++    GL_CALL(glShaderSource(sh, 1, &src, NULL));
++    GL_CALL(glCompileShader(sh));
++    if(!shader_ok(sh)) {
++        GL_CALL(glDeleteShader(sh));
++        return 0;
++    }
++    return sh;
++}
++
++static unsigned int link_program(const char * vs, const char * fs)
++{
++    unsigned int v = compile_shader(GL_VERTEX_SHADER, vs);
++    unsigned int f = compile_shader(GL_FRAGMENT_SHADER, fs);
++    if(!v || !f) {
++        if(v) GL_CALL(glDeleteShader(v));
++        if(f) GL_CALL(glDeleteShader(f));
++        return 0;
++    }
++    unsigned int p = glCreateProgram();
++    GL_CALL(glAttachShader(p, v));
++    GL_CALL(glAttachShader(p, f));
++    GL_CALL(glBindAttribLocation(p, 0, "a_pos"));
++    GL_CALL(glLinkProgram(p));
++    GL_CALL(glDeleteShader(v));
++    GL_CALL(glDeleteShader(f));
++    int ok = 0;
++    GL_CALL(glGetProgramiv(p, GL_LINK_STATUS, &ok));
++    if(!ok) {
++        GL_CALL(glDeleteProgram(p));
++        return 0;
++    }
++    return p;
++}
++
++#if LV_USE_EGL
++static const char * vs_fill =
++    "attribute vec2 a_pos;\n"
++    "uniform vec2 u_disp;\n"
++    "varying vec2 v_p;\n"
++    "void main(){ v_p=a_pos; vec2 ndc; ndc.x=a_pos.x/u_disp.x*2.0-1.0; ndc.y=a_pos.y/u_disp.y*2.0-1.0; gl_Position=vec4(ndc,0.0,1.0);}\n";
++static const char * fs_fill =
++    "precision mediump float;\n"
++    "uniform vec4 u_color;\n"
++    "uniform vec4 u_rect;\n"
++    "uniform float u_radius;\n"
++    "varying vec2 v_p;\n"
++    "void main(){\n"
++    "  vec2 h=u_rect.zw*0.5;\n"
++    "  vec2 c=u_rect.xy+h;\n"
++    "  vec2 q=abs(v_p-c)-h+u_radius;\n"
++    "  float d=length(max(q,0.0))+min(max(q.x,q.y),0.0)-u_radius;\n"
++    "  float a=u_color.a*(1.0-smoothstep(-1.0,1.0,d));\n"
++    "  if(a<0.004) discard;\n"
++    "  gl_FragColor=vec4(u_color.rgb,a);\n"
++    "}\n";
++static const char * vs_tex =
++    "attribute vec2 a_pos;\n"
++    "attribute vec2 a_uv;\n"
++    "uniform vec2 u_disp;\n"
++    "varying vec2 v_uv;\n"
++    "void main(){ v_uv=a_uv; vec2 ndc; ndc.x=a_pos.x/u_disp.x*2.0-1.0; ndc.y=a_pos.y/u_disp.y*2.0-1.0; gl_Position=vec4(ndc,0.0,1.0);}\n";
++static const char * fs_tex =
++    "precision mediump float;\n"
++    "varying vec2 v_uv;\n"
++    "uniform sampler2D u_tex;\n"
++    "void main(){ gl_FragColor=texture2D(u_tex,v_uv);}\n";
++#else
++static const char * vs_fill =
++    "#version 120\n"
++    "attribute vec2 a_pos;\n"
++    "uniform vec2 u_disp;\n"
++    "varying vec2 v_p;\n"
++    "void main(){ v_p=a_pos; vec2 ndc; ndc.x=a_pos.x/u_disp.x*2.0-1.0; ndc.y=a_pos.y/u_disp.y*2.0-1.0; gl_Position=vec4(ndc,0.0,1.0);}\n";
++static const char * fs_fill =
++    "#version 120\n"
++    "uniform vec4 u_color;\n"
++    "uniform vec4 u_rect;\n"
++    "uniform float u_radius;\n"
++    "varying vec2 v_p;\n"
++    "void main(){\n"
++    "  vec2 h=u_rect.zw*0.5;\n"
++    "  vec2 c=u_rect.xy+h;\n"
++    "  vec2 q=abs(v_p-c)-h+u_radius;\n"
++    "  float d=length(max(q,0.0))+min(max(q.x,q.y),0.0)-u_radius;\n"
++    "  float a=u_color.a*(1.0-smoothstep(-1.0,1.0,d));\n"
++    "  if(a<0.004) discard;\n"
++    "  gl_FragColor=vec4(u_color.rgb,a);\n"
++    "}\n";
++static const char * vs_tex =
++    "#version 120\n"
++    "attribute vec2 a_pos;\n"
++    "attribute vec2 a_uv;\n"
++    "uniform vec2 u_disp;\n"
++    "varying vec2 v_uv;\n"
++    "void main(){ v_uv=a_uv; vec2 ndc; ndc.x=a_pos.x/u_disp.x*2.0-1.0; ndc.y=a_pos.y/u_disp.y*2.0-1.0; gl_Position=vec4(ndc,0.0,1.0);}\n";
++static const char * fs_tex =
++    "#version 120\n"
++    "varying vec2 v_uv;\n"
++    "uniform sampler2D u_tex;\n"
++    "void main(){ gl_FragColor=texture2D(u_tex,v_uv);}\n";
++#endif
++
++void lv_gpu_composite_gles2_2d_init(void)
++{
++    if(prog_fill) return;
++    prog_fill = link_program(vs_fill, fs_fill);
++    if(prog_fill) {
++        loc_fill_disp = glGetUniformLocation(prog_fill, "u_disp");
++        loc_fill_color = glGetUniformLocation(prog_fill, "u_color");
++        loc_fill_rect = glGetUniformLocation(prog_fill, "u_rect");
++        loc_fill_radius = glGetUniformLocation(prog_fill, "u_radius");
++    }
++    prog_tex = link_program(vs_tex, fs_tex);
++    if(prog_tex) {
++        loc_tex_disp = glGetUniformLocation(prog_tex, "u_disp");
++        loc_tex_sampler = glGetUniformLocation(prog_tex, "u_tex");
++    }
++    lv_draw_buf_init(&g_raster_buf, 0, 0, LV_COLOR_FORMAT_ARGB8888, LV_STRIDE_AUTO, NULL, 0);
++}
++
++void lv_gpu_composite_gles2_2d_deinit(void)
++{
++    if(prog_fill) GL_CALL(glDeleteProgram(prog_fill));
++    if(prog_tex) GL_CALL(glDeleteProgram(prog_tex));
++    prog_fill = prog_tex = 0;
++    if(g_raster_buf.unaligned_data) lv_free(g_raster_buf.unaligned_data);
++    lv_memzero(&g_raster_buf, sizeof(g_raster_buf));
++    g_queue_count = 0;
++}
++
++void lv_gpu_composite_gles2_2d_queue_reset(void)
++{
++    g_queue_count = 0;
++}
++
++uint32_t lv_gpu_composite_gles2_2d_queue_count(void)
++{
++    return g_queue_count;
++}
++
++bool lv_gpu_composite_gles2_2d_is_raster_nest(void)
++{
++    return g_raster_nest > 0;
++}
++
++static bool queue_push(const lv_gpu2d_cmd_t * cmd)
++{
++    if(g_queue_count >= LV_GPU2D_QUEUE_MAX) return false;
++    g_queue[g_queue_count++] = *cmd;
++    return true;
++}
++
++bool lv_gpu_composite_gles2_2d_queue_fill(const lv_area_t * area, const lv_area_t * clip,
++                                          lv_color_t color, lv_opa_t opa, int32_t radius)
++{
++    lv_gpu2d_cmd_t cmd;
++    lv_memzero(&cmd, sizeof(cmd));
++    cmd.type = LV_GPU2D_CMD_FILL;
++    cmd.area = *area;
++    cmd.clip = *clip;
++    cmd.u.fill.color = color;
++    cmd.u.fill.opa = opa;
++    cmd.u.fill.radius = radius;
++    return queue_push(&cmd);
++}
++
++bool lv_gpu_composite_gles2_2d_queue_border(const lv_area_t * area, const lv_area_t * clip,
++                                            lv_color_t color, lv_opa_t opa, int32_t width,
++                                            int32_t radius, lv_border_side_t side)
++{
++    lv_gpu2d_cmd_t cmd;
++    lv_memzero(&cmd, sizeof(cmd));
++    cmd.type = LV_GPU2D_CMD_BORDER;
++    cmd.area = *area;
++    cmd.clip = *clip;
++    cmd.u.border.color = color;
++    cmd.u.border.opa = opa;
++    cmd.u.border.width = width;
++    cmd.u.border.radius = radius;
++    cmd.u.border.side = side;
++    return queue_push(&cmd);
++}
++
++bool lv_gpu_composite_gles2_2d_queue_label(const lv_area_t * area, const lv_area_t * clip,
++                                             const lv_draw_label_dsc_t * dsc)
++{
++    lv_gpu2d_cmd_t cmd;
++    lv_memzero(&cmd, sizeof(cmd));
++    cmd.type = LV_GPU2D_CMD_LABEL;
++    cmd.area = *area;
++    cmd.clip = *clip;
++    cmd.u.label = *dsc;
++    return queue_push(&cmd);
++}
++
++bool lv_gpu_composite_gles2_2d_queue_letter(const lv_area_t * area, const lv_area_t * clip,
++                                              const lv_draw_letter_dsc_t * dsc)
++{
++    lv_gpu2d_cmd_t cmd;
++    lv_memzero(&cmd, sizeof(cmd));
++    cmd.type = LV_GPU2D_CMD_LETTER;
++    cmd.area = *area;
++    cmd.clip = *clip;
++    cmd.u.letter = *dsc;
++    return queue_push(&cmd);
++}
++
++bool lv_gpu_composite_gles2_2d_queue_image(const lv_area_t * area, const lv_area_t * clip,
++                                           const lv_draw_image_dsc_t * dsc)
++{
++    lv_gpu2d_cmd_t cmd;
++    lv_memzero(&cmd, sizeof(cmd));
++    cmd.type = LV_GPU2D_CMD_IMAGE;
++    cmd.area = *area;
++    cmd.clip = *clip;
++    cmd.u.image = *dsc;
++    return queue_push(&cmd);
++}
++
++static void apply_scissor(const lv_area_t * clip, int32_t dh)
++{
++    int32_t w = clip->x2 - clip->x1 + 1;
++    int32_t h = clip->y2 - clip->y1 + 1;
++    int32_t y = dh - clip->y2 - 1;
++    if(w < 0) w = 0;
++    if(h < 0) h = 0;
++    GL_CALL(glEnable(GL_SCISSOR_TEST));
++    GL_CALL(glScissor(clip->x1, y, w, h));
++}
++
++static void draw_fill_quad(const lv_area_t * area, int32_t dw, int32_t dh,
++                           lv_color_t color, lv_opa_t opa, int32_t radius)
++{
++    if(!prog_fill) return;
++    lv_color32_t c32 = lv_color_to_32(color, opa);
++    float x1 = (float)area->x1;
++    float y1 = (float)area->y1;
++    float x2 = (float)area->x2 + 1.0f;
++    float y2 = (float)area->y2 + 1.0f;
++    float verts[] = {
++        x1, y1,  x2, y1,  x2, y2,
++        x1, y1,  x2, y2,  x1, y2,
++    };
++    float rw = x2 - x1;
++    float rh = y2 - y1;
++    float rad = (float)radius;
++    if(rad > rw * 0.5f) rad = rw * 0.5f;
++    if(rad > rh * 0.5f) rad = rh * 0.5f;
++
++    GL_CALL(glUseProgram(prog_fill));
++    GL_CALL(glUniform2f(loc_fill_disp, (float)dw, (float)dh));
++    GL_CALL(glUniform4f(loc_fill_color, c32.red / 255.0f, c32.green / 255.0f, c32.blue / 255.0f,
++                        c32.alpha / 255.0f));
++    GL_CALL(glUniform4f(loc_fill_rect, x1, y1, rw, rh));
++    GL_CALL(glUniform1f(loc_fill_radius, rad));
++    GL_CALL(glEnableVertexAttribArray(0));
++    GL_CALL(glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, verts));
++    GL_CALL(glDrawArrays(GL_TRIANGLES, 0, 6));
++    GL_CALL(glDisableVertexAttribArray(0));
++}
++
++static void draw_border_gpu(const lv_gpu2d_cmd_t * cmd, int32_t dw, int32_t dh)
++{
++    const lv_area_t * a = &cmd->area;
++    int32_t w = cmd->u.border.width;
++    if(w < 1) return;
++    lv_border_side_t side = cmd->u.border.side;
++    lv_area_t inner = *a;
++    lv_area_t outer = *a;
++
++    if(side & LV_BORDER_SIDE_TOP) {
++        lv_area_t r = { outer.x1, outer.y1, outer.x2, outer.y1 + w - 1 };
++        draw_fill_quad(&r, dw, dh, cmd->u.border.color, cmd->u.border.opa, cmd->u.border.radius);
++    }
++    if(side & LV_BORDER_SIDE_BOTTOM) {
++        lv_area_t r = { outer.x1, outer.y2 - w + 1, outer.x2, outer.y2 };
++        draw_fill_quad(&r, dw, dh, cmd->u.border.color, cmd->u.border.opa, cmd->u.border.radius);
++    }
++    if(side & LV_BORDER_SIDE_LEFT) {
++        lv_area_t r = { outer.x1, inner.y1 + w, outer.x1 + w - 1, inner.y2 - w };
++        draw_fill_quad(&r, dw, dh, cmd->u.border.color, cmd->u.border.opa, 0);
++    }
++    if(side & LV_BORDER_SIDE_RIGHT) {
++        lv_area_t r = { outer.x2 - w + 1, inner.y1 + w, outer.x2, inner.y2 - w };
++        draw_fill_quad(&r, dw, dh, cmd->u.border.color, cmd->u.border.opa, 0);
++    }
++}
++
++static bool raster_sw_to_texture(const lv_area_t * area, const lv_area_t * clip,
++                                 void (*draw_fn)(lv_layer_t *, void *, const lv_area_t *),
++                                 void * dsc, unsigned int * tex_out)
++{
++    int32_t rw = lv_area_get_width(area);
++    int32_t rh = lv_area_get_height(area);
++    if(rw < 1 || rh < 1) return false;
++
++    if(NULL == lv_draw_buf_reshape(&g_raster_buf, LV_COLOR_FORMAT_ARGB8888, rw, rh, LV_STRIDE_AUTO)) {
++        uint32_t sz = LV_DRAW_BUF_SIZE(rw, rh, LV_COLOR_FORMAT_ARGB8888);
++        uint8_t * mem = lv_realloc(g_raster_buf.unaligned_data, sz);
++        if(!mem) return false;
++        lv_draw_buf_init(&g_raster_buf, rw, rh, LV_COLOR_FORMAT_ARGB8888, LV_STRIDE_AUTO, mem, sz);
++    }
++    lv_memzero(g_raster_buf.data, g_raster_buf.data_size);
++
++    lv_layer_t layer;
++    lv_layer_init(&layer);
++    layer.draw_buf = &g_raster_buf;
++    layer.color_format = LV_COLOR_FORMAT_ARGB8888;
++    layer.buf_area.x1 = 0;
++    layer.buf_area.y1 = 0;
++    layer.buf_area.x2 = rw - 1;
++    layer.buf_area.y2 = rh - 1;
++    lv_area_t rel_clip = *clip;
++    if(!lv_area_intersect(&rel_clip, &rel_clip, area)) return false;
++    rel_clip.x1 -= area->x1;
++    rel_clip.y1 -= area->y1;
++    rel_clip.x2 -= area->x1;
++    rel_clip.y2 -= area->y1;
++    layer._clip_area = rel_clip;
++    layer.phy_clip_area = rel_clip;
++
++    lv_display_t * disp = lv_refr_get_disp_refreshing();
++    if(!disp) return false;
++
++    g_raster_nest++;
++    lv_area_t rel = { 0, 0, rw - 1, rh - 1 };
++    draw_fn(&layer, dsc, &rel);
++
++    layer.all_tasks_added = true;
++    while(layer.draw_task_head) {
++        lv_draw_dispatch_layer(disp, &layer);
++        if(layer.draw_task_head) {
++            lv_draw_dispatch_wait_for_request();
++        }
++    }
++    g_raster_nest--;
++
++    unsigned int tex = 0;
++    GL_CALL(glGenTextures(1, &tex));
++    GL_CALL(glBindTexture(GL_TEXTURE_2D, tex));
++    GL_CALL(glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR));
++    GL_CALL(glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR));
++    GL_CALL(glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE));
++    GL_CALL(glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE));
++    GL_CALL(glPixelStorei(GL_UNPACK_ALIGNMENT, 1));
++    GL_CALL(glPixelStorei(GL_UNPACK_ROW_LENGTH, g_raster_buf.header.stride / 4));
++    GL_CALL(glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, rw, rh, 0, GL_BGRA, GL_UNSIGNED_BYTE, g_raster_buf.data));
++    GL_CALL(glBindTexture(GL_TEXTURE_2D, 0));
++    GL_CALL(glPixelStorei(GL_UNPACK_ROW_LENGTH, 0));
++    *tex_out = tex;
++    return true;
++}
++
++static void draw_label_sw_cb(lv_layer_t * layer, void * dsc, const lv_area_t * rel)
++{
++    lv_draw_label(layer, dsc, rel);
++}
++
++static void draw_letter_sw_cb(lv_layer_t * layer, void * dsc, const lv_area_t * rel)
++{
++    lv_point_t pt = { rel->x1, rel->y1 };
++    lv_draw_letter(layer, dsc, &pt);
++}
++
++static void draw_image_sw_cb(lv_layer_t * layer, void * dsc, const lv_area_t * rel)
++{
++    lv_draw_image(layer, dsc, rel);
++}
++
++static void draw_textured_quad(const lv_area_t * area, int32_t dw, int32_t dh, unsigned int tex)
++{
++    if(!prog_tex || tex == 0) return;
++    float x1 = (float)area->x1;
++    float y1 = (float)area->y1;
++    float x2 = (float)area->x2 + 1.0f;
++    float y2 = (float)area->y2 + 1.0f;
++    float pos[] = {
++        x1, y1,  x2, y1,  x2, y2,
++        x1, y1,  x2, y2,  x1, y2,
++    };
++    float uv[] = {
++        0.0f, 0.0f,  1.0f, 0.0f,  1.0f, 1.0f,
++        0.0f, 0.0f,  1.0f, 1.0f,  0.0f, 1.0f,
++    };
++    GL_CALL(glUseProgram(prog_tex));
++    GL_CALL(glUniform2f(loc_tex_disp, (float)dw, (float)dh));
++    GL_CALL(glActiveTexture(GL_TEXTURE0));
++    GL_CALL(glBindTexture(GL_TEXTURE_2D, tex));
++    GL_CALL(glUniform1i(loc_tex_sampler, 0));
++    GL_CALL(glEnableVertexAttribArray(0));
++    GL_CALL(glEnableVertexAttribArray(1));
++    GL_CALL(glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, pos));
++    GL_CALL(glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 0, uv));
++    GL_CALL(glDrawArrays(GL_TRIANGLES, 0, 6));
++    GL_CALL(glDisableVertexAttribArray(1));
++    GL_CALL(glDisableVertexAttribArray(0));
++    GL_CALL(glBindTexture(GL_TEXTURE_2D, 0));
++}
++
++uint32_t lv_gpu_composite_gles2_2d_render_batch(unsigned int color_tex, int32_t dw, int32_t dh,
++                                                uint32_t * sw_raster_out)
++{
++    if(sw_raster_out) *sw_raster_out = 0;
++    if(g_queue_count == 0 || color_tex == 0 || dw < 1 || dh < 1) return 0;
++    if(!prog_fill && !prog_tex) lv_gpu_composite_gles2_2d_init();
++
++    unsigned int fbo = 0;
++    GL_CALL(glGenFramebuffers(1, &fbo));
++    GL_CALL(glBindFramebuffer(GL_FRAMEBUFFER, fbo));
++    GL_CALL(glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, color_tex, 0));
++#if !LV_USE_EGL
++    {
++        GLenum db = GL_COLOR_ATTACHMENT0;
++        GL_CALL(glDrawBuffers(1, &db));
++        GL_CALL(glReadBuffer(GL_COLOR_ATTACHMENT0));
++    }
++#endif
++
++    GL_CALL(glViewport(0, 0, dw, dh));
++    GL_CALL(glEnable(GL_BLEND));
++    GL_CALL(glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA));
++
++    uint32_t rendered = 0;
++    uint32_t sw_raster = 0;
++
++    for(uint32_t i = 0; i < g_queue_count; i++) {
++        lv_gpu2d_cmd_t * cmd = &g_queue[i];
++        lv_area_t draw_area;
++        if(!lv_area_intersect(&draw_area, &cmd->area, &cmd->clip)) continue;
++        apply_scissor(&cmd->clip, dh);
++
++        switch(cmd->type) {
++            case LV_GPU2D_CMD_FILL:
++                draw_fill_quad(&draw_area, dw, dh, cmd->u.fill.color, cmd->u.fill.opa, cmd->u.fill.radius);
++                rendered++;
++                break;
++            case LV_GPU2D_CMD_BORDER:
++                draw_border_gpu(cmd, dw, dh);
++                rendered++;
++                break;
++            case LV_GPU2D_CMD_LABEL: {
++                    unsigned int tex = 0;
++                    if(raster_sw_to_texture(&cmd->area, &cmd->clip, draw_label_sw_cb,
++                                             &cmd->u.label, &tex)) {
++                        draw_textured_quad(&draw_area, dw, dh, tex);
++                        GL_CALL(glDeleteTextures(1, &tex));
++                        sw_raster++;
++                        rendered++;
++                    }
++                }
++                break;
++            case LV_GPU2D_CMD_LETTER: {
++                    unsigned int tex = 0;
++                    if(raster_sw_to_texture(&cmd->area, &cmd->clip, draw_letter_sw_cb,
++                                             &cmd->u.letter, &tex)) {
++                        draw_textured_quad(&draw_area, dw, dh, tex);
++                        GL_CALL(glDeleteTextures(1, &tex));
++                        sw_raster++;
++                        rendered++;
++                    }
++                }
++                break;
++            case LV_GPU2D_CMD_IMAGE: {
++                    unsigned int tex = 0;
++                    if(raster_sw_to_texture(&cmd->area, &cmd->clip, draw_image_sw_cb,
++                                             &cmd->u.image, &tex)) {
++                        draw_textured_quad(&draw_area, dw, dh, tex);
++                        GL_CALL(glDeleteTextures(1, &tex));
++                        sw_raster++;
++                        rendered++;
++                    }
++                }
++                break;
++            default:
++                break;
++        }
++    }
++
++    GL_CALL(glDisable(GL_SCISSOR_TEST));
++    GL_CALL(glBindFramebuffer(GL_FRAMEBUFFER, 0));
++    GL_CALL(glDeleteFramebuffers(1, &fbo));
++
++    if(sw_raster_out) *sw_raster_out = sw_raster;
++    return rendered;
++}
++
++#endif /*LV_USE_DRAW_GPU_COMPOSITE*/
+diff --git a/src/draw/gpu_composite/lv_gpu_composite_gles2_2d.h b/src/draw/gpu_composite/lv_gpu_composite_gles2_2d.h
+new file mode 100644
+index 000000000..7c49f7f05
+--- /dev/null
++++ b/src/draw/gpu_composite/lv_gpu_composite_gles2_2d.h
+@@ -0,0 +1,51 @@
++/**
++ * @file lv_gpu_composite_gles2_2d.h — GLES2 2D batch pass [GL2]
++ */
++
++#ifndef LV_GPU_COMPOSITE_GLES2_2D_H
++#define LV_GPU_COMPOSITE_GLES2_2D_H
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++#include "../../lv_conf_internal.h"
++
++#if LV_USE_DRAW_GPU_COMPOSITE
++
++#include "../../misc/lv_area.h"
++#include "../../misc/lv_color.h"
++#include "../../include/lvgl/draw/lv_draw_label.h"
++#include "../../include/lvgl/draw/lv_draw_image.h"
++#include "../../include/lvgl/draw/lv_draw_rect.h"
++
++void lv_gpu_composite_gles2_2d_init(void);
++void lv_gpu_composite_gles2_2d_deinit(void);
++
++void lv_gpu_composite_gles2_2d_queue_reset(void);
++uint32_t lv_gpu_composite_gles2_2d_queue_count(void);
++bool lv_gpu_composite_gles2_2d_is_raster_nest(void);
++
++bool lv_gpu_composite_gles2_2d_queue_fill(const lv_area_t * area, const lv_area_t * clip,
++                                          lv_color_t color, lv_opa_t opa, int32_t radius);
++bool lv_gpu_composite_gles2_2d_queue_border(const lv_area_t * area, const lv_area_t * clip,
++                                            lv_color_t color, lv_opa_t opa, int32_t width,
++                                            int32_t radius, lv_border_side_t side);
++bool lv_gpu_composite_gles2_2d_queue_label(const lv_area_t * area, const lv_area_t * clip,
++                                             const lv_draw_label_dsc_t * dsc);
++bool lv_gpu_composite_gles2_2d_queue_letter(const lv_area_t * area, const lv_area_t * clip,
++                                              const lv_draw_letter_dsc_t * dsc);
++bool lv_gpu_composite_gles2_2d_queue_image(const lv_area_t * area, const lv_area_t * clip,
++                                           const lv_draw_image_dsc_t * dsc);
++
++/** Render queued 2D commands into color_tex (full display size). Returns tasks rendered. */
++uint32_t lv_gpu_composite_gles2_2d_render_batch(unsigned int color_tex, int32_t dw, int32_t dh,
++                                                uint32_t * sw_raster_out);
++
++#endif /*LV_USE_DRAW_GPU_COMPOSITE*/
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif /*LV_GPU_COMPOSITE_GLES2_2D_H*/
+diff --git a/src/draw/gpu_composite/lv_gpu_composite_gles2_3d.c b/src/draw/gpu_composite/lv_gpu_composite_gles2_3d.c
+index bd949e6e1..1f735a97e 100644
+--- a/src/draw/gpu_composite/lv_gpu_composite_gles2_3d.c
++++ b/src/draw/gpu_composite/lv_gpu_composite_gles2_3d.c
+@@ -8,6 +8,7 @@
+ 
+ #include "../../drivers/opengles/lv_opengles_debug.h"
+ #include "../../drivers/opengles/lv_opengles_private.h"
++#include "../../include/lvgl/3d/lv_3d_plane_bake.h"
+ #include "../../misc/lv_color.h"
+ #include <stdlib.h>
+ #include <string.h>
+@@ -16,6 +17,11 @@ static unsigned int prog;
+ static int loc_mvp;
+ static int loc_color;
+ 
++static unsigned int prog_tex;
++static int loc_tex_mvp;
++static int loc_tex_sampler;
++static int loc_tex_opa;
++
+ #if LV_USE_EGL
+ static const char * vs_src =
+     "attribute vec3 a_pos;\n"
+@@ -39,6 +45,39 @@ static const char * fs_src =
+     "void main() { gl_FragColor = u_color; }\n";
+ #endif
+ 
++#if LV_USE_SNAPSHOT
++#if LV_USE_EGL
++static const char * vs_tex_src =
++    "attribute vec3 a_pos;\n"
++    "attribute vec2 a_uv;\n"
++    "varying vec2 v_uv;\n"
++    "uniform mat4 u_mvp;\n"
++    "void main() { v_uv = a_uv; gl_Position = u_mvp * vec4(a_pos, 1.0); }\n";
++
++static const char * fs_tex_src =
++    "precision mediump float;\n"
++    "varying vec2 v_uv;\n"
++    "uniform sampler2D u_tex;\n"
++    "uniform float u_opa;\n"
++    "void main() { vec4 c = texture2D(u_tex, v_uv); gl_FragColor = vec4(c.rgb, c.a * u_opa); }\n";
++#else
++static const char * vs_tex_src =
++    "#version 120\n"
++    "attribute vec3 a_pos;\n"
++    "attribute vec2 a_uv;\n"
++    "varying vec2 v_uv;\n"
++    "uniform mat4 u_mvp;\n"
++    "void main() { v_uv = a_uv; gl_Position = u_mvp * vec4(a_pos, 1.0); }\n";
++
++static const char * fs_tex_src =
++    "#version 120\n"
++    "varying vec2 v_uv;\n"
++    "uniform sampler2D u_tex;\n"
++    "uniform float u_opa;\n"
++    "void main() { vec4 c = texture2D(u_tex, v_uv); gl_FragColor = vec4(c.rgb, c.a * u_opa); }\n";
++#endif
++#endif
++
+ static bool shader_ok(unsigned int sh)
+ {
+     int ok = 0;
+@@ -94,6 +133,39 @@ static unsigned int link_program(const char * vs, const char * fs)
+     return p;
+ }
+ 
++#if LV_USE_SNAPSHOT
++static unsigned int link_program_tex(const char * vs, const char * fs)
++{
++    unsigned int v = compile_shader(GL_VERTEX_SHADER, vs);
++    unsigned int f = compile_shader(GL_FRAGMENT_SHADER, fs);
++    if(!v || !f) {
++        if(v) GL_CALL(glDeleteShader(v));
++        if(f) GL_CALL(glDeleteShader(f));
++        return 0;
++    }
++    unsigned int p = glCreateProgram();
++    GL_CALL(glAttachShader(p, v));
++    GL_CALL(glAttachShader(p, f));
++    GL_CALL(glBindAttribLocation(p, 0, "a_pos"));
++    GL_CALL(glBindAttribLocation(p, 1, "a_uv"));
++    GL_CALL(glLinkProgram(p));
++    GL_CALL(glDeleteShader(v));
++    GL_CALL(glDeleteShader(f));
++
++    int ok = 0;
++    GL_CALL(glGetProgramiv(p, GL_LINK_STATUS, &ok));
++    if(!ok) {
++        char log[512];
++        log[0] = '\0';
++        glGetProgramInfoLog(p, sizeof(log), NULL, log);
++        LV_LOG_ERROR("LVGL tex shader link failed: %s", log);
++        GL_CALL(glDeleteProgram(p));
++        return 0;
++    }
++    return p;
++}
++#endif
++
+ void lv_gpu_composite_gles2_3d_init(void)
+ {
+     if(prog) return;
+@@ -101,6 +173,15 @@ void lv_gpu_composite_gles2_3d_init(void)
+     if(!prog) return;
+     loc_mvp = glGetUniformLocation(prog, "u_mvp");
+     loc_color = glGetUniformLocation(prog, "u_color");
++
++#if LV_USE_SNAPSHOT
++    prog_tex = link_program_tex(vs_tex_src, fs_tex_src);
++    if(prog_tex) {
++        loc_tex_mvp = glGetUniformLocation(prog_tex, "u_mvp");
++        loc_tex_sampler = glGetUniformLocation(prog_tex, "u_tex");
++        loc_tex_opa = glGetUniformLocation(prog_tex, "u_opa");
++    }
++#endif
+ }
+ 
+ void lv_gpu_composite_gles2_3d_deinit(void)
+@@ -109,6 +190,12 @@ void lv_gpu_composite_gles2_3d_deinit(void)
+         GL_CALL(glDeleteProgram(prog));
+         prog = 0;
+     }
++#if LV_USE_SNAPSHOT
++    if(prog_tex) {
++        GL_CALL(glDeleteProgram(prog_tex));
++        prog_tex = 0;
++    }
++#endif
+ }
+ 
+ static void box_wire_verts(float w, float h, float d, float * out24)
+@@ -146,11 +233,63 @@ static void box_solid_verts(float w, float h, float d, float * out108)
+     }
+ }
+ 
++static void draw_plane_snapshot(const lv_3d_draw_item_t * it, const float view[16], const float proj[16])
++{
++#if LV_USE_SNAPSHOT
++    if(!prog_tex) return;
++    if(it->material.opa <= LV_OPA_MIN) return;
++
++    unsigned int tex = lv_3d_plane_get_gl_texture(it->snapshot_id);
++    if(tex == 0) return;
++
++    float mvp[16], mv[16];
++    lv_3d_mat4_mul(mv, view, it->transform.world);
++    lv_3d_mat4_mul(mvp, proj, mv);
++
++    float hx = it->w * 0.5f, hy = it->h * 0.5f, hz = it->d * 0.5f;
++    const float pos[] = {
++        -hx, -hy, hz,   hx, -hy, hz,   hx, hy, hz,
++        -hx, -hy, hz,   hx, hy, hz,   -hx, hy, hz,
++    };
++    const float uv[] = {
++        0.0f, 0.0f,   1.0f, 0.0f,   1.0f, 1.0f,
++        0.0f, 0.0f,   1.0f, 1.0f,   0.0f, 1.0f,
++    };
++
++    GL_CALL(glUseProgram(prog_tex));
++    GL_CALL(glUniformMatrix4fv(loc_tex_mvp, 1, GL_FALSE, mvp));
++    GL_CALL(glUniform1f(loc_tex_opa, (float)it->material.opa / 255.0f));
++    GL_CALL(glActiveTexture(GL_TEXTURE0));
++    GL_CALL(glBindTexture(GL_TEXTURE_2D, tex));
++    GL_CALL(glUniform1i(loc_tex_sampler, 0));
++    GL_CALL(glEnableVertexAttribArray(0));
++    GL_CALL(glEnableVertexAttribArray(1));
++    GL_CALL(glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, pos));
++    GL_CALL(glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 0, uv));
++    GL_CALL(glDrawArrays(GL_TRIANGLES, 0, 6));
++    GL_CALL(glDisableVertexAttribArray(1));
++    GL_CALL(glDisableVertexAttribArray(0));
++    GL_CALL(glBindTexture(GL_TEXTURE_2D, 0));
++#else
++    LV_UNUSED(it);
++    LV_UNUSED(view);
++    LV_UNUSED(proj);
++#endif
++}
++
+ static void draw_item(const lv_3d_draw_item_t * it, const float view[16], const float proj[16])
+ {
++    if(it->material.opa <= LV_OPA_MIN) return;
++
++    if(it->material.kind == LV_3D_MAT_PLANE_SNAPSHOT && it->snapshot_id != LV_3D_SNAPSHOT_ID_NONE) {
++        draw_plane_snapshot(it, view, proj);
++        return;
++    }
++
+     float mvp[16], mv[16];
+     lv_3d_mat4_mul(mv, view, it->transform.world);
+     lv_3d_mat4_mul(mvp, proj, mv);
++    GL_CALL(glUseProgram(prog));
+     GL_CALL(glUniformMatrix4fv(loc_mvp, 1, GL_FALSE, mvp));
+ 
+     lv_color32_t c32 = lv_color_to_32(it->material.color, it->material.opa);
+diff --git a/src/widgets/3d/lv_3dmesh.c b/src/widgets/3d/lv_3dmesh.c
+index 90a70de97..e8e2ea466 100644
+--- a/src/widgets/3d/lv_3dmesh.c
++++ b/src/widgets/3d/lv_3dmesh.c
+@@ -24,6 +24,19 @@ const lv_obj_class_t lv_3dmesh_class = {
+     .name = "3dmesh",
+ };
+ 
++#ifndef M_PI
++    #define M_PI 3.14159265358979323846
++#endif
++
++static const float rad_to_deg = (float)(180.0 / M_PI);
++static const float deg_to_rad = (float)(M_PI / 180.0);
++
++static void sync_draw_material(lv_3dmesh_t * mesh)
++{
++    lv_3d_draw_item_t * item = lv_3d_mesh_get_draw_item_mut(mesh->mesh_id);
++    if(item) item->material = mesh->material;
++}
++
+ static void sync_transform(lv_3dmesh_t * mesh)
+ {
+     lv_3d_draw_item_t * item = lv_3d_mesh_get_draw_item_mut(mesh->mesh_id);
+@@ -79,6 +92,16 @@ void lv_3dmesh_set_material(lv_obj_t * obj, const lv_3d_material_t * mat)
+     lv_obj_invalidate(obj);
+ }
+ 
++void lv_3dmesh_set_plane_snapshot(lv_obj_t * obj, lv_3d_snapshot_id_t snapshot_id)
++{
++    LV_ASSERT_OBJ(obj, MY_CLASS);
++    lv_3dmesh_t * mesh = (lv_3dmesh_t *)obj;
++    mesh->snapshot_id = snapshot_id;
++    mesh->material.kind = LV_3D_MAT_PLANE_SNAPSHOT;
++    mesh->material.opa = LV_OPA_COVER;
++    lv_obj_invalidate(obj);
++}
++
+ void lv_3dmesh_set_position(lv_obj_t * obj, float x, float y, float z)
+ {
+     LV_ASSERT_OBJ(obj, MY_CLASS);
+@@ -89,10 +112,17 @@ void lv_3dmesh_set_position(lv_obj_t * obj, float x, float y, float z)
+ }
+ 
+ void lv_3dmesh_set_rotation_y(lv_obj_t * obj, float yaw_deg)
++{
++    lv_3dmesh_set_rotation(obj, 0.0f, yaw_deg, 0.0f);
++}
++
++void lv_3dmesh_set_rotation(lv_obj_t * obj, float pitch_deg, float yaw_deg, float roll_deg)
+ {
+     LV_ASSERT_OBJ(obj, MY_CLASS);
+     lv_3dmesh_t * mesh = (lv_3dmesh_t *)obj;
+-    mesh->rot[1] = yaw_deg * (float)(3.14159265 / 180.0);
++    mesh->rot[0] = pitch_deg * deg_to_rad;
++    mesh->rot[1] = yaw_deg * deg_to_rad;
++    mesh->rot[2] = roll_deg * deg_to_rad;
+     sync_transform(mesh);
+     lv_obj_invalidate(obj);
+ }
+@@ -106,12 +136,56 @@ void lv_3dmesh_set_scale(lv_obj_t * obj, float sx, float sy, float sz)
+     lv_obj_invalidate(obj);
+ }
+ 
++void lv_3dmesh_set_opa(lv_obj_t * obj, lv_opa_t opa)
++{
++    LV_ASSERT_OBJ(obj, MY_CLASS);
++    lv_3dmesh_t * mesh = (lv_3dmesh_t *)obj;
++    mesh->material.opa = opa;
++    sync_draw_material(mesh);
++    lv_obj_invalidate(obj);
++}
++
++void lv_3dmesh_get_position(lv_obj_t * obj, float * x, float * y, float * z)
++{
++    LV_ASSERT_OBJ(obj, MY_CLASS);
++    lv_3dmesh_t * mesh = (lv_3dmesh_t *)obj;
++    if(x) *x = mesh->pos[0];
++    if(y) *y = mesh->pos[1];
++    if(z) *z = mesh->pos[2];
++}
++
++void lv_3dmesh_get_rotation(lv_obj_t * obj, float * pitch_deg, float * yaw_deg, float * roll_deg)
++{
++    LV_ASSERT_OBJ(obj, MY_CLASS);
++    lv_3dmesh_t * mesh = (lv_3dmesh_t *)obj;
++    if(pitch_deg) *pitch_deg = mesh->rot[0] * rad_to_deg;
++    if(yaw_deg) *yaw_deg = mesh->rot[1] * rad_to_deg;
++    if(roll_deg) *roll_deg = mesh->rot[2] * rad_to_deg;
++}
++
++void lv_3dmesh_get_scale(lv_obj_t * obj, float * sx, float * sy, float * sz)
++{
++    LV_ASSERT_OBJ(obj, MY_CLASS);
++    lv_3dmesh_t * mesh = (lv_3dmesh_t *)obj;
++    if(sx) *sx = mesh->scale[0];
++    if(sy) *sy = mesh->scale[1];
++    if(sz) *sz = mesh->scale[2];
++}
++
++lv_opa_t lv_3dmesh_get_opa(lv_obj_t * obj)
++{
++    LV_ASSERT_OBJ(obj, MY_CLASS);
++    lv_3dmesh_t * mesh = (lv_3dmesh_t *)obj;
++    return mesh->material.opa;
++}
++
+ static void lv_3dmesh_constructor(const lv_obj_class_t * class_p, lv_obj_t * obj)
+ {
+     LV_UNUSED(class_p);
+     lv_3dmesh_t * mesh = (lv_3dmesh_t *)obj;
+     mesh->mesh_id = lv_3d_mesh_alloc_box(100, 100, 100, true);
+     mesh->scale[0] = mesh->scale[1] = mesh->scale[2] = 1.0f;
++    mesh->snapshot_id = LV_3D_SNAPSHOT_ID_NONE;
+     lv_3d_material_init(&mesh->material, LV_3D_MAT_WIREFRAME, lv_color_hex(0x00FFAA), LV_OPA_COVER);
+     sync_transform(mesh);
+ }
+diff --git a/src/widgets/3d/lv_3dmesh_private.h b/src/widgets/3d/lv_3dmesh_private.h
+index 024e613b3..2d5a55db7 100644
+--- a/src/widgets/3d/lv_3dmesh_private.h
++++ b/src/widgets/3d/lv_3dmesh_private.h
+@@ -16,6 +16,7 @@ typedef struct {
+     lv_obj_t obj;
+     lv_3d_mesh_id_t mesh_id;
+     lv_3d_material_t material;
++    lv_3d_snapshot_id_t snapshot_id;
+     float pos[3];
+     float rot[3];
+     float scale[3];
+diff --git a/src/widgets/3d/lv_3dviewport.c b/src/widgets/3d/lv_3dviewport.c
+index 0f60de6dd..6fe656f5c 100644
+--- a/src/widgets/3d/lv_3dviewport.c
++++ b/src/widgets/3d/lv_3dviewport.c
+@@ -9,12 +9,15 @@
+ #include "../../core/lv_obj_class_private.h"
+ #include "../../include/lvgl/draw/lv_draw_3d.h"
+ #include "../../draw/gpu_composite/lv_draw_gpu_composite.h"
++#include "../../3d/lv_3d_internal.h"
+ 
+ #define MY_CLASS (&lv_3dviewport_class)
+ 
+ static void lv_3dviewport_event(const lv_obj_class_t * class_p, lv_event_t * e);
++static void lv_3dviewport_constructor(const lv_obj_class_t * class_p, lv_obj_t * obj);
+ 
+ const lv_obj_class_t lv_3dviewport_class = {
++    .constructor_cb = lv_3dviewport_constructor,
+     .event_cb = lv_3dviewport_event,
+     .width_def = LV_PCT(100),
+     .height_def = LV_PCT(100),
+@@ -46,6 +49,55 @@ void lv_3dviewport_set_scene(lv_obj_t * obj, lv_obj_t * scene)
+     lv_obj_invalidate(obj);
+ }
+ 
++void lv_3dviewport_set_pickable(lv_obj_t * obj, bool en)
++{
++    LV_ASSERT_OBJ(obj, MY_CLASS);
++    lv_3dviewport_t * vp = (lv_3dviewport_t *)obj;
++    vp->pickable = en;
++}
++
++lv_obj_t * lv_3dviewport_pick_obj(lv_obj_t * obj, lv_point3d_t ray_origin, lv_vec3_t ray_dir)
++{
++    LV_ASSERT_OBJ(obj, MY_CLASS);
++    lv_3dviewport_t * vp = (lv_3dviewport_t *)obj;
++    if(!vp->pickable || !vp->scene) return NULL;
++    return lv_3d_pick_scene(vp->scene, ray_origin, ray_dir);
++}
++
++lv_obj_t * lv_3dviewport_pick_at(lv_obj_t * obj, int32_t x, int32_t y)
++{
++    LV_ASSERT_OBJ(obj, MY_CLASS);
++    lv_3dviewport_t * vp = (lv_3dviewport_t *)obj;
++    if(!vp->pickable || !vp->scene || !vp->camera) return NULL;
++
++    int32_t w = lv_obj_get_width(obj);
++    int32_t h = lv_obj_get_height(obj);
++    if(w < 1 || h < 1) return NULL;
++
++    lv_area_t coords;
++    lv_obj_get_coords(obj, &coords);
++    x -= coords.x1;
++    y -= coords.y1;
++    if(x < 0 || y < 0 || x >= w || y >= h) return NULL;
++
++    /* Match GLES viewport placement (vy = dh - y2 - 1) used during 3D flush. */
++    y = h - 1 - y;
++
++    float view[16], proj[16];
++    lv_3d_camera_get_view_proj(vp->camera, w, h, view, proj);
++
++    lv_vec3_t origin, dir;
++    lv_3d_ray_from_screen(x, y, w, h, view, proj, &origin, &dir);
++    return lv_3d_pick_scene(vp->scene, origin, dir);
++}
++
++static void lv_3dviewport_constructor(const lv_obj_class_t * class_p, lv_obj_t * obj)
++{
++    LV_UNUSED(class_p);
++    lv_3dviewport_t * vp = (lv_3dviewport_t *)obj;
++    vp->pickable = true;
++}
++
+ static void lv_3dviewport_event(const lv_obj_class_t * class_p, lv_event_t * e)
+ {
+     LV_UNUSED(class_p);
+diff --git a/src/widgets/3d/lv_3dviewport_private.h b/src/widgets/3d/lv_3dviewport_private.h
+index ab2ac0c4c..a23c651ba 100644
+--- a/src/widgets/3d/lv_3dviewport_private.h
++++ b/src/widgets/3d/lv_3dviewport_private.h
+@@ -14,6 +14,7 @@ typedef struct {
+     lv_obj_t obj;
+     lv_obj_t * camera;
+     lv_obj_t * scene;
++    bool pickable;
+ } lv_3dviewport_t;
+ 
+ extern const lv_obj_class_t lv_3dviewport_class;
+-- 
+2.34.1
+

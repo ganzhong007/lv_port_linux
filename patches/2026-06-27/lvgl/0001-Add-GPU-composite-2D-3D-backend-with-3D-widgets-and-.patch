@@ -1,0 +1,2846 @@
+From d70fbbad9a0a8350cf553b9cfb34ff081725cdd2 Mon Sep 17 00:00:00 2001
+From: gz <gz@local>
+Date: Sat, 27 Jun 2026 16:17:30 +0800
+Subject: [PATCH 1/3] Add GPU composite 2D/3D backend with 3D widgets and GLES
+ fixes.
+
+Introduce gpu_composite pipeline, 3D scene/mesh/viewport widgets, and
+OpenGL ES / Wayland display fixes for Phase 1 LVGL 2D/3D integration.
+
+Co-authored-by: Cursor <cursoragent@cursor.com>
+---
+ include/lvgl/3d/lv_3d.h                       |  49 ++
+ include/lvgl/draw/lv_draw.h                   |   2 +-
+ include/lvgl/draw/lv_draw_3d.h                |  41 +-
+ include/lvgl/lvgl.h                           |   8 +
+ include/lvgl/widgets/lv_3dcamera.h            |  29 ++
+ include/lvgl/widgets/lv_3dmesh.h              |  34 ++
+ include/lvgl/widgets/lv_3dscene.h             |  26 +
+ include/lvgl/widgets/lv_3dstack.h             |  30 ++
+ include/lvgl/widgets/lv_3dviewport.h          |  28 ++
+ lv_conf_template.h                            |  29 ++
+ src/3d/lv_3d_camera.c                         |  21 +
+ src/3d/lv_3d_internal.h                       |  53 ++
+ src/3d/lv_3d_material.c                       |  16 +
+ src/3d/lv_3d_math.c                           |  94 ++++
+ src/3d/lv_3d_mesh.c                           |  53 ++
+ src/3d/lv_3d_scene.c                          |  48 ++
+ src/3d/lv_3d_transform.c                      |  49 ++
+ .../gpu_composite/lv_draw_gpu_composite.c     | 475 ++++++++++++++++++
+ .../gpu_composite/lv_draw_gpu_composite.h     |  66 +++
+ .../gpu_composite/lv_gpu_composite_caps.c     |  36 ++
+ .../gpu_composite/lv_gpu_composite_caps.h     |  32 ++
+ .../gpu_composite/lv_gpu_composite_gles2_3d.c | 257 ++++++++++
+ .../gpu_composite/lv_gpu_composite_gles2_3d.h |  33 ++
+ src/draw/lv_draw.c                            |   2 +-
+ src/draw/lv_draw_3d.c                         |  48 +-
+ src/draw/opengles/lv_draw_opengles.c          |   2 +
+ src/drivers/opengles/lv_opengles_driver.c     |   7 +
+ src/drivers/opengles/lv_opengles_glfw.c       |  86 +++-
+ src/drivers/opengles/lv_opengles_private.h    |   8 +
+ src/drivers/opengles/lv_opengles_texture.c    |  32 +-
+ src/drivers/wayland/lv_wayland_backend_egl.c  |  15 +-
+ src/lv_init.c                                 |   9 +
+ src/widgets/3d/lv_3dcamera.c                  |  59 +++
+ src/widgets/3d/lv_3dcamera_private.h          |  27 +
+ src/widgets/3d/lv_3dmesh.c                    | 125 +++++
+ src/widgets/3d/lv_3dmesh_private.h            |  28 ++
+ src/widgets/3d/lv_3dscene.c                   |  25 +
+ src/widgets/3d/lv_3dstack.c                   |  84 ++++
+ src/widgets/3d/lv_3dviewport.c                |  76 +++
+ src/widgets/3d/lv_3dviewport_private.h        |  23 +
+ 40 files changed, 2084 insertions(+), 81 deletions(-)
+ create mode 100644 include/lvgl/3d/lv_3d.h
+ create mode 100644 include/lvgl/widgets/lv_3dcamera.h
+ create mode 100644 include/lvgl/widgets/lv_3dmesh.h
+ create mode 100644 include/lvgl/widgets/lv_3dscene.h
+ create mode 100644 include/lvgl/widgets/lv_3dstack.h
+ create mode 100644 include/lvgl/widgets/lv_3dviewport.h
+ create mode 100644 src/3d/lv_3d_camera.c
+ create mode 100644 src/3d/lv_3d_internal.h
+ create mode 100644 src/3d/lv_3d_material.c
+ create mode 100644 src/3d/lv_3d_math.c
+ create mode 100644 src/3d/lv_3d_mesh.c
+ create mode 100644 src/3d/lv_3d_scene.c
+ create mode 100644 src/3d/lv_3d_transform.c
+ create mode 100644 src/draw/gpu_composite/lv_draw_gpu_composite.c
+ create mode 100644 src/draw/gpu_composite/lv_draw_gpu_composite.h
+ create mode 100644 src/draw/gpu_composite/lv_gpu_composite_caps.c
+ create mode 100644 src/draw/gpu_composite/lv_gpu_composite_caps.h
+ create mode 100644 src/draw/gpu_composite/lv_gpu_composite_gles2_3d.c
+ create mode 100644 src/draw/gpu_composite/lv_gpu_composite_gles2_3d.h
+ create mode 100644 src/widgets/3d/lv_3dcamera.c
+ create mode 100644 src/widgets/3d/lv_3dcamera_private.h
+ create mode 100644 src/widgets/3d/lv_3dmesh.c
+ create mode 100644 src/widgets/3d/lv_3dmesh_private.h
+ create mode 100644 src/widgets/3d/lv_3dscene.c
+ create mode 100644 src/widgets/3d/lv_3dstack.c
+ create mode 100644 src/widgets/3d/lv_3dviewport.c
+ create mode 100644 src/widgets/3d/lv_3dviewport_private.h
+
+diff --git a/include/lvgl/3d/lv_3d.h b/include/lvgl/3d/lv_3d.h
+new file mode 100644
+index 000000000..75a5cf80b
+--- /dev/null
++++ b/include/lvgl/3d/lv_3d.h
+@@ -0,0 +1,49 @@
++/**
++ * @file lv_3d.h
++ * LVGL 3D subsystem public types
++ */
++
++#ifndef LV_3D_H
++#define LV_3D_H
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++#include "../config/lv_conf_internal.h"
++
++#if LV_USE_3D
++
++#include "../draw/lv_color.h"
++#include "../lv_types.h"
++
++typedef uint32_t lv_3d_mesh_id_t;
++#define LV_3D_MESH_ID_NONE 0
++
++typedef enum {
++    LV_3D_MAT_OPAQUE = 0,
++    LV_3D_MAT_ALPHA,
++    LV_3D_MAT_WIREFRAME,
++} lv_3d_material_kind_t;
++
++typedef struct {
++    lv_3d_material_kind_t kind;
++    lv_color_t color;
++    lv_opa_t opa;
++} lv_3d_material_t;
++
++typedef struct {
++    float x;
++    float y;
++    float z;
++} lv_vec3_t;
++
++void lv_3d_material_init(lv_3d_material_t * mat, lv_3d_material_kind_t kind, lv_color_t color, lv_opa_t opa);
++
++#endif /*LV_USE_3D*/
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif /*LV_3D_H*/
+diff --git a/include/lvgl/draw/lv_draw.h b/include/lvgl/draw/lv_draw.h
+index fbd3e575f..7d385c7eb 100644
+--- a/include/lvgl/draw/lv_draw.h
++++ b/include/lvgl/draw/lv_draw.h
+@@ -61,7 +61,7 @@ typedef enum {
+ #if LV_USE_VECTOR_GRAPHIC
+     LV_DRAW_TASK_TYPE_VECTOR,
+ #endif
+-#if LV_USE_3DTEXTURE
++#if LV_USE_3DTEXTURE || LV_USE_3D
+     LV_DRAW_TASK_TYPE_3D,
+ #endif
+ } lv_draw_task_type_t;
+diff --git a/include/lvgl/draw/lv_draw_3d.h b/include/lvgl/draw/lv_draw_3d.h
+index 8a049a7dd..ac5bccb03 100644
+--- a/include/lvgl/draw/lv_draw_3d.h
++++ b/include/lvgl/draw/lv_draw_3d.h
+@@ -16,21 +16,44 @@ extern "C" {
+ 
+ #include "lv_draw.h"
+ 
+-#if LV_USE_3DTEXTURE
++#if LV_USE_3DTEXTURE || LV_USE_3D
++
++#if LV_USE_3D
++#include "../3d/lv_3d.h"
++#endif
+ 
+ /*********************
+  *      DEFINES
+  *********************/
+ 
++#if LV_USE_3D
++typedef enum {
++    LV_3D_DRAW_KIND_LEGACY_TEX = 0,
++    LV_3D_DRAW_KIND_MESH,
++    LV_3D_DRAW_KIND_VIEWPORT_PASS,
++} lv_3d_draw_kind_t;
++#endif
++
+ /**********************
+  *      TYPEDEFS
+  **********************/
+ 
+ typedef struct {
+     lv_draw_dsc_base_t base;
++#if LV_USE_3D
++    lv_3d_draw_kind_t kind;
++    lv_3d_mesh_id_t mesh_id;
++    lv_3d_material_t material;
++    float model[16];
++    lv_obj_t * camera;
++    lv_obj_t * scene;
++    lv_area_t viewport_area;
++#endif
++#if LV_USE_3DTEXTURE
+     lv_3dtexture_id_t tex_id;
+     bool h_flip;
+     bool v_flip;
++#endif
+     lv_opa_t opa;
+ } lv_draw_3d_dsc_t;
+ 
+@@ -38,31 +61,17 @@ typedef struct {
+  * GLOBAL PROTOTYPES
+  **********************/
+ 
+-/**
+- * Initialize a 3D draw descriptor
+- * @param dsc       pointer to a draw descriptor
+- */
+ void lv_draw_3d_dsc_init(lv_draw_3d_dsc_t * dsc);
+ 
+-/**
+- * Try to get a 3D draw descriptor from a draw task.
+- * @param task      draw task
+- * @return          the task's draw descriptor or NULL if the task is not of type LV_DRAW_TASK_TYPE_3D
+- */
+ lv_draw_3d_dsc_t * lv_draw_task_get_3d_dsc(lv_draw_task_t * task);
+ 
+-/**
+- * Create a 3D draw task
+- * @param layer     pointer to a layer
+- * @param dsc       pointer to an initialized `lv_draw_3d_dsc_t` variable
+- */
+ void lv_draw_3d(lv_layer_t * layer, const lv_draw_3d_dsc_t * dsc, const lv_area_t * coords);
+ 
+ /**********************
+  *      MACROS
+  **********************/
+ 
+-#endif /*LV_USE_3DTEXTURE*/
++#endif /*LV_USE_3DTEXTURE || LV_USE_3D*/
+ 
+ #ifdef __cplusplus
+ } /*extern "C"*/
+diff --git a/include/lvgl/lvgl.h b/include/lvgl/lvgl.h
+index d0837768e..20c5a6a52 100644
+--- a/include/lvgl/lvgl.h
++++ b/include/lvgl/lvgl.h
+@@ -166,6 +166,14 @@
+ #include "themes/lv_theme_simple.h"
+ #include "tick/lv_tick.h"
+ #include "widgets/lv_3dtexture.h"
++#if LV_USE_3D
++#include "3d/lv_3d.h"
++#include "widgets/lv_3dscene.h"
++#include "widgets/lv_3dcamera.h"
++#include "widgets/lv_3dviewport.h"
++#include "widgets/lv_3dmesh.h"
++#include "widgets/lv_3dstack.h"
++#endif
+ #include "widgets/lv_animimage.h"
+ #include "widgets/lv_arc.h"
+ #include "widgets/lv_arclabel.h"
+diff --git a/include/lvgl/widgets/lv_3dcamera.h b/include/lvgl/widgets/lv_3dcamera.h
+new file mode 100644
+index 000000000..20a987b92
+--- /dev/null
++++ b/include/lvgl/widgets/lv_3dcamera.h
+@@ -0,0 +1,29 @@
++/**
++ * @file lv_3dcamera.h
++ */
++
++#ifndef LV_3DCAMERA_H
++#define LV_3DCAMERA_H
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++#include "../config/lv_conf_internal.h"
++
++#if LV_USE_3D && LV_USE_3D_WIDGETS
++
++#include "../core/lv_obj.h"
++#include "../3d/lv_3d.h"
++
++lv_obj_t * lv_3dcamera_create(lv_obj_t * parent);
++void lv_3dcamera_set_perspective(lv_obj_t * cam, float fov_deg, float near_z, float far_z);
++void lv_3dcamera_look_at(lv_obj_t * cam, lv_vec3_t eye, lv_vec3_t target, lv_vec3_t up);
++
++#endif
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif /*LV_3DCAMERA_H*/
+diff --git a/include/lvgl/widgets/lv_3dmesh.h b/include/lvgl/widgets/lv_3dmesh.h
+new file mode 100644
+index 000000000..7e57c4957
+--- /dev/null
++++ b/include/lvgl/widgets/lv_3dmesh.h
+@@ -0,0 +1,34 @@
++/**
++ * @file lv_3dmesh.h
++ */
++
++#ifndef LV_3DMESH_H
++#define LV_3DMESH_H
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++#include "../config/lv_conf_internal.h"
++
++#if LV_USE_3D && LV_USE_3D_WIDGETS
++
++#include "../core/lv_obj.h"
++#include "../3d/lv_3d.h"
++
++lv_obj_t * lv_3dmesh_create(lv_obj_t * parent);
++void lv_3dmesh_set_box(lv_obj_t * mesh, float w, float h, float d);
++void lv_3dmesh_set_wireframe(lv_obj_t * mesh, bool en);
++void lv_3dmesh_set_color(lv_obj_t * mesh, lv_color_t c);
++void lv_3dmesh_set_material(lv_obj_t * mesh, const lv_3d_material_t * mat);
++void lv_3dmesh_set_position(lv_obj_t * mesh, float x, float y, float z);
++void lv_3dmesh_set_rotation_y(lv_obj_t * mesh, float yaw_deg);
++void lv_3dmesh_set_scale(lv_obj_t * mesh, float sx, float sy, float sz);
++
++#endif /*LV_USE_3D && LV_USE_3D_WIDGETS*/
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif /*LV_3DMESH_H*/
+diff --git a/include/lvgl/widgets/lv_3dscene.h b/include/lvgl/widgets/lv_3dscene.h
+new file mode 100644
+index 000000000..8f49c44b5
+--- /dev/null
++++ b/include/lvgl/widgets/lv_3dscene.h
+@@ -0,0 +1,26 @@
++/**
++ * @file lv_3dscene.h
++ */
++
++#ifndef LV_3DSCENE_H
++#define LV_3DSCENE_H
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++#include "../config/lv_conf_internal.h"
++
++#if LV_USE_3D && LV_USE_3D_WIDGETS
++
++#include "../core/lv_obj.h"
++
++lv_obj_t * lv_3dscene_create(lv_obj_t * parent);
++
++#endif
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif /*LV_3DSCENE_H*/
+diff --git a/include/lvgl/widgets/lv_3dstack.h b/include/lvgl/widgets/lv_3dstack.h
+new file mode 100644
+index 000000000..ce72fef31
+--- /dev/null
++++ b/include/lvgl/widgets/lv_3dstack.h
+@@ -0,0 +1,30 @@
++/**
++ * @file lv_3dstack.h
++ */
++
++#ifndef LV_3DSTACK_H
++#define LV_3DSTACK_H
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++#include "../config/lv_conf_internal.h"
++
++#if LV_USE_3D && LV_USE_3DSTACK
++
++#include "../core/lv_obj.h"
++
++lv_obj_t * lv_3dstack_create(lv_obj_t * parent);
++void lv_3dstack_set_grid(lv_obj_t * stack, uint8_t cols, uint8_t rows);
++void lv_3dstack_set_row_depth(lv_obj_t * stack, uint8_t row, float z);
++void lv_3dstack_set_cell_spacing(lv_obj_t * stack, float x_gap, float y_gap);
++void lv_3dstack_layout(lv_obj_t * stack);
++
++#endif
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif /*LV_3DSTACK_H*/
+diff --git a/include/lvgl/widgets/lv_3dviewport.h b/include/lvgl/widgets/lv_3dviewport.h
+new file mode 100644
+index 000000000..135d37d89
+--- /dev/null
++++ b/include/lvgl/widgets/lv_3dviewport.h
+@@ -0,0 +1,28 @@
++/**
++ * @file lv_3dviewport.h
++ */
++
++#ifndef LV_3DVIEWPORT_H
++#define LV_3DVIEWPORT_H
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++#include "../config/lv_conf_internal.h"
++
++#if LV_USE_3D && LV_USE_3D_WIDGETS
++
++#include "../core/lv_obj.h"
++
++lv_obj_t * lv_3dviewport_create(lv_obj_t * parent);
++void lv_3dviewport_set_camera(lv_obj_t * vp, lv_obj_t * camera);
++void lv_3dviewport_set_scene(lv_obj_t * vp, lv_obj_t * scene);
++
++#endif
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif /*LV_3DVIEWPORT_H*/
+diff --git a/lv_conf_template.h b/lv_conf_template.h
+index 2a86bc79c..de3e7fb24 100644
+--- a/lv_conf_template.h
++++ b/lv_conf_template.h
+@@ -413,6 +413,35 @@
+     #define LV_DRAW_OPENGLES_TEXTURE_CACHE_COUNT 64
+ #endif
+ 
++/** LVGL 2D/3D mixed GPU compositor (lv_draw_gpu_composite). Requires LV_USE_OPENGLES driver. */
++#define LV_USE_GPU_COMPOSITE 0
++#define LV_USE_DRAW_GPU_COMPOSITE 0
++#if LV_USE_DRAW_GPU_COMPOSITE
++    #if LV_USE_DRAW_OPENGLES
++        #error "LV_USE_DRAW_GPU_COMPOSITE and LV_USE_DRAW_OPENGLES cannot both be enabled"
++    #endif
++    #if LV_USE_DRAW_NANOVG
++        #error "LV_USE_DRAW_GPU_COMPOSITE and LV_USE_DRAW_NANOVG cannot both be enabled"
++    #endif
++#endif
++
++/** Built-in 3D scene graph + widgets (lv_3dscene, lv_3dmesh, …). Requires LV_USE_DRAW_GPU_COMPOSITE. */
++#define LV_USE_3D 0
++#if LV_USE_3D
++    #define LV_USE_3D_WIDGETS 1
++    #define LV_USE_3D_OBJ_PROPERTIES 0
++    #define LV_USE_3DSTACK 1
++    #define LV_USE_3D_SEGMENT_POOL 1
++    #define LV_GPU_COMPOSITE_AR_PASSTHROUGH 1
++    #define LV_GPU_COMPOSITE_GLES_API 2
++    #define LV_GPU_COMPOSITE_ALLOW_GLES3 0
++    #define LV_GPU_COMPOSITE_DEPTH_BITS 16
++    #define LV_GPU_COMPOSITE_USE_ETC1 1
++    #define LV_GPU_COMPOSITE_LOG_CAPS 1
++    /** 0=RGBA8888, 1=RGB565+A8, 2=RGBA4444, 3=RGBA5551 */
++    #define LV_GPU_COMPOSITE_COLOR_FORMAT 0
++#endif
++
+ /** Draw using espressif PPA accelerator */
+ #define LV_USE_PPA  0
+ #if LV_USE_PPA
+diff --git a/src/3d/lv_3d_camera.c b/src/3d/lv_3d_camera.c
+new file mode 100644
+index 000000000..5a094cb33
+--- /dev/null
++++ b/src/3d/lv_3d_camera.c
+@@ -0,0 +1,21 @@
++/**
++ * @file lv_3d_camera.c
++ */
++
++#include "lv_3d_internal.h"
++#include "../widgets/3d/lv_3dcamera_private.h"
++
++#if LV_USE_3D
++
++void lv_3d_camera_get_view_proj(lv_obj_t * cam, int32_t vp_w, int32_t vp_h, float view[16], float proj[16])
++{
++    lv_3dcamera_t * c = (lv_3dcamera_t *)cam;
++    float aspect = vp_h > 0 ? (float)vp_w / (float)vp_h : 1.0f;
++    lv_vec3_t eye = { c->eye.x, c->eye.y, c->eye.z };
++    lv_vec3_t target = { c->target.x, c->target.y, c->target.z };
++    lv_vec3_t up = { c->up.x, c->up.y, c->up.z };
++    lv_3d_mat4_look_at(view, eye, target, up);
++    lv_3d_mat4_perspective(proj, c->fov_deg, aspect, c->near_z, c->far_z);
++}
++
++#endif /*LV_USE_3D*/
+diff --git a/src/3d/lv_3d_internal.h b/src/3d/lv_3d_internal.h
+new file mode 100644
+index 000000000..33aba6d03
+--- /dev/null
++++ b/src/3d/lv_3d_internal.h
+@@ -0,0 +1,53 @@
++/**
++ * @file lv_3d_internal.h
++ */
++
++#ifndef LV_3D_INTERNAL_H
++#define LV_3D_INTERNAL_H
++
++#include "../lvgl_public.h"
++#include "../include/lvgl/3d/lv_3d.h"
++
++#if LV_USE_3D
++
++#define LV_3D_MAX_DRAW_ITEMS 256
++
++typedef struct {
++    float local[16];
++    float world[16];
++    bool dirty;
++} lv_3d_transform_t;
++
++typedef struct {
++    lv_3d_mesh_id_t id;
++    float w, h, d;
++    bool wireframe;
++    lv_3d_material_t material;
++    lv_3d_transform_t transform;
++    lv_obj_t * obj;
++} lv_3d_draw_item_t;
++
++void lv_3d_mat4_identity(float m[16]);
++void lv_3d_mat4_mul(float out[16], const float a[16], const float b[16]);
++void lv_3d_mat4_translate(float m[16], float x, float y, float z);
++void lv_3d_mat4_scale(float m[16], float sx, float sy, float sz);
++void lv_3d_mat4_rotate_y(float m[16], float rad);
++void lv_3d_mat4_perspective(float m[16], float fov_deg, float aspect, float near_z, float far_z);
++void lv_3d_mat4_look_at(float m[16], lv_vec3_t eye, lv_vec3_t target, lv_vec3_t up);
++
++void lv_3d_transform_init(lv_3d_transform_t * t);
++void lv_3d_transform_set_local_trs(lv_3d_transform_t * t, float tx, float ty, float tz,
++                                 float rx, float ry, float rz, float sx, float sy, float sz);
++void lv_3d_transform_update_world(lv_3d_transform_t * t, const float parent_world[16]);
++
++lv_3d_mesh_id_t lv_3d_mesh_alloc_box(float w, float h, float d, bool wireframe);
++const lv_3d_draw_item_t * lv_3d_mesh_get_draw_item(lv_3d_mesh_id_t id);
++lv_3d_draw_item_t * lv_3d_mesh_get_draw_item_mut(lv_3d_mesh_id_t id);
++
++void lv_3d_camera_get_view_proj(lv_obj_t * cam, int32_t vp_w, int32_t vp_h, float view[16], float proj[16]);
++
++uint32_t lv_3d_scene_collect(lv_obj_t * scene, lv_3d_draw_item_t * out, uint32_t max_out);
++
++#endif /*LV_USE_3D*/
++
++#endif /*LV_3D_INTERNAL_H*/
+diff --git a/src/3d/lv_3d_material.c b/src/3d/lv_3d_material.c
+new file mode 100644
+index 000000000..7408252b2
+--- /dev/null
++++ b/src/3d/lv_3d_material.c
+@@ -0,0 +1,16 @@
++/**
++ * @file lv_3d_material.c
++ */
++
++#include "../../include/lvgl/3d/lv_3d.h"
++
++#if LV_USE_3D
++
++void lv_3d_material_init(lv_3d_material_t * mat, lv_3d_material_kind_t kind, lv_color_t color, lv_opa_t opa)
++{
++    mat->kind = kind;
++    mat->color = color;
++    mat->opa = opa;
++}
++
++#endif /*LV_USE_3D*/
+diff --git a/src/3d/lv_3d_math.c b/src/3d/lv_3d_math.c
+new file mode 100644
+index 000000000..03a26f14b
+--- /dev/null
++++ b/src/3d/lv_3d_math.c
+@@ -0,0 +1,94 @@
++/**
++ * @file lv_3d_math.c — OpenGL column-major matrices
++ */
++
++#include "lv_3d_internal.h"
++
++#if LV_USE_3D
++
++#include <math.h>
++
++#ifndef M_PI
++    #define M_PI 3.14159265358979323846
++#endif
++
++void lv_3d_mat4_identity(float m[16])
++{
++    lv_memzero(m, sizeof(float) * 16);
++    m[0] = m[5] = m[10] = m[15] = 1.0f;
++}
++
++void lv_3d_mat4_mul(float out[16], const float a[16], const float b[16])
++{
++    float r[16];
++    for(int i = 0; i < 4; i++) {
++        for(int j = 0; j < 4; j++) {
++            r[i + j * 4] = a[i + 0 * 4] * b[0 + j * 4]
++                         + a[i + 1 * 4] * b[1 + j * 4]
++                         + a[i + 2 * 4] * b[2 + j * 4]
++                         + a[i + 3 * 4] * b[3 + j * 4];
++        }
++    }
++    lv_memcpy(out, r, sizeof(r));
++}
++
++void lv_3d_mat4_translate(float m[16], float x, float y, float z)
++{
++    lv_3d_mat4_identity(m);
++    m[12] = x;
++    m[13] = y;
++    m[14] = z;
++}
++
++void lv_3d_mat4_scale(float m[16], float sx, float sy, float sz)
++{
++    lv_3d_mat4_identity(m);
++    m[0] = sx;
++    m[5] = sy;
++    m[10] = sz;
++}
++
++void lv_3d_mat4_rotate_y(float m[16], float rad)
++{
++    lv_3d_mat4_identity(m);
++    float c = cosf(rad);
++    float s = sinf(rad);
++    m[0] = c;
++    m[2] = -s;
++    m[8] = s;
++    m[10] = c;
++}
++
++void lv_3d_mat4_perspective(float m[16], float fov_deg, float aspect, float near_z, float far_z)
++{
++    lv_memzero(m, sizeof(float) * 16);
++    float tanHalf = tanf(fov_deg * 0.5f * (float)(M_PI / 180.0));
++    m[0] = 1.0f / (aspect * tanHalf);
++    m[5] = 1.0f / tanHalf;
++    m[10] = -(far_z + near_z) / (far_z - near_z);
++    m[11] = -1.0f;
++    m[14] = -(2.0f * far_z * near_z) / (far_z - near_z);
++}
++
++void lv_3d_mat4_look_at(float m[16], lv_vec3_t eye, lv_vec3_t target, lv_vec3_t up)
++{
++    lv_vec3_t f = { target.x - eye.x, target.y - eye.y, target.z - eye.z };
++    float fl = sqrtf(f.x * f.x + f.y * f.y + f.z * f.z);
++    if(fl > 0.0001f) { f.x /= fl; f.y /= fl; f.z /= fl; }
++
++    lv_vec3_t s = { f.y * up.z - f.z * up.y, f.z * up.x - f.x * up.z, f.x * up.y - f.y * up.x };
++    float sl = sqrtf(s.x * s.x + s.y * s.y + s.z * s.z);
++    if(sl > 0.0001f) { s.x /= sl; s.y /= sl; s.z /= sl; }
++
++    lv_vec3_t u = { s.y * f.z - s.z * f.y, s.z * f.x - s.x * f.z, s.x * f.y - s.y * f.x };
++
++    lv_3d_mat4_identity(m);
++    m[0] = s.x;  m[1] = s.y;  m[2] = s.z;
++    m[4] = u.x;  m[5] = u.y;  m[6] = u.z;
++    m[8] = -f.x; m[9] = -f.y; m[10] = -f.z;
++    m[12] = -(s.x * eye.x + s.y * eye.y + s.z * eye.z);
++    m[13] = -(u.x * eye.x + u.y * eye.y + u.z * eye.z);
++    m[14] = (f.x * eye.x + f.y * eye.y + f.z * eye.z);
++}
++
++#endif /*LV_USE_3D*/
+diff --git a/src/3d/lv_3d_mesh.c b/src/3d/lv_3d_mesh.c
+new file mode 100644
+index 000000000..983ca525a
+--- /dev/null
++++ b/src/3d/lv_3d_mesh.c
+@@ -0,0 +1,53 @@
++/**
++ * @file lv_3d_mesh.c
++ */
++
++#include "lv_3d_internal.h"
++
++#if LV_USE_3D
++
++typedef struct {
++    bool used;
++    float w, h, d;
++    bool wireframe;
++    lv_3d_draw_item_t item;
++} lv_3d_mesh_slot_t;
++
++#define LV_3D_MESH_POOL_SIZE 512
++
++static lv_3d_mesh_slot_t mesh_pool[LV_3D_MESH_POOL_SIZE];
++
++lv_3d_mesh_id_t lv_3d_mesh_alloc_box(float w, float h, float d, bool wireframe)
++{
++    for(uint32_t i = 1; i < LV_3D_MESH_POOL_SIZE; i++) {
++        if(!mesh_pool[i].used) {
++            mesh_pool[i].used = true;
++            mesh_pool[i].w = w;
++            mesh_pool[i].h = h;
++            mesh_pool[i].d = d;
++            mesh_pool[i].wireframe = wireframe;
++            mesh_pool[i].item.id = i;
++            mesh_pool[i].item.w = w;
++            mesh_pool[i].item.h = h;
++            mesh_pool[i].item.d = d;
++            mesh_pool[i].item.wireframe = wireframe;
++            lv_3d_transform_init(&mesh_pool[i].item.transform);
++            return i;
++        }
++    }
++    return LV_3D_MESH_ID_NONE;
++}
++
++const lv_3d_draw_item_t * lv_3d_mesh_get_draw_item(lv_3d_mesh_id_t id)
++{
++    if(id == 0 || id >= LV_3D_MESH_POOL_SIZE || !mesh_pool[id].used) return NULL;
++    return &mesh_pool[id].item;
++}
++
++lv_3d_draw_item_t * lv_3d_mesh_get_draw_item_mut(lv_3d_mesh_id_t id)
++{
++    if(id == 0 || id >= LV_3D_MESH_POOL_SIZE || !mesh_pool[id].used) return NULL;
++    return &mesh_pool[id].item;
++}
++
++#endif /*LV_USE_3D*/
+diff --git a/src/3d/lv_3d_scene.c b/src/3d/lv_3d_scene.c
+new file mode 100644
+index 000000000..61f52c25d
+--- /dev/null
++++ b/src/3d/lv_3d_scene.c
+@@ -0,0 +1,48 @@
++/**
++ * @file lv_3d_scene.c
++ */
++
++#include "lv_3d_internal.h"
++#include "../widgets/3d/lv_3dmesh_private.h"
++
++#if LV_USE_3D
++
++static void collect_obj(lv_obj_t * obj, const float parent_world[16], lv_3d_draw_item_t * out, uint32_t * count,
++                          uint32_t max_out)
++{
++    uint32_t i;
++    for(i = 0; i < lv_obj_get_child_count(obj); i++) {
++        lv_obj_t * child = lv_obj_get_child(obj, i);
++        if(lv_obj_check_type(child, &lv_3dmesh_class)) {
++            if(*count >= max_out) return;
++            lv_3dmesh_t * mesh = (lv_3dmesh_t *)child;
++            lv_3d_draw_item_t * item = lv_3d_mesh_get_draw_item_mut(mesh->mesh_id);
++            if(item) {
++                lv_3d_transform_set_local_trs(&item->transform,
++                                              mesh->pos[0], mesh->pos[1], mesh->pos[2],
++                                              mesh->rot[0], mesh->rot[1], mesh->rot[2],
++                                              mesh->scale[0], mesh->scale[1], mesh->scale[2]);
++                lv_3d_transform_update_world(&item->transform, parent_world);
++                item->material = mesh->material;
++                item->wireframe = (mesh->material.kind == LV_3D_MAT_WIREFRAME);
++                item->obj = child;
++                lv_memcpy(&out[*count], item, sizeof(*item));
++                (*count)++;
++            }
++        }
++        else {
++            collect_obj(child, parent_world, out, count, max_out);
++        }
++    }
++}
++
++uint32_t lv_3d_scene_collect(lv_obj_t * scene, lv_3d_draw_item_t * out, uint32_t max_out)
++{
++    float identity[16];
++    lv_3d_mat4_identity(identity);
++    uint32_t count = 0;
++    collect_obj(scene, identity, out, &count, max_out);
++    return count;
++}
++
++#endif /*LV_USE_3D*/
+diff --git a/src/3d/lv_3d_transform.c b/src/3d/lv_3d_transform.c
+new file mode 100644
+index 000000000..9644a0989
+--- /dev/null
++++ b/src/3d/lv_3d_transform.c
+@@ -0,0 +1,49 @@
++/**
++ * @file lv_3d_transform.c
++ */
++
++#include "lv_3d_internal.h"
++
++#if LV_USE_3D
++
++#include <math.h>
++
++#ifndef M_PI
++    #define M_PI 3.14159265358979323846
++#endif
++
++void lv_3d_transform_init(lv_3d_transform_t * t)
++{
++    lv_3d_mat4_identity(t->local);
++    lv_3d_mat4_identity(t->world);
++    t->dirty = true;
++}
++
++void lv_3d_transform_set_local_trs(lv_3d_transform_t * t, float tx, float ty, float tz,
++                                   float rx, float ry, float rz, float sx, float sy, float sz)
++{
++    float mt[16], ms[16], mrx[16], mry[16], mrz[16], tmp[16];
++    lv_3d_mat4_translate(mt, tx, ty, tz);
++    lv_3d_mat4_scale(ms, sx, sy, sz);
++
++    lv_3d_mat4_identity(mrx);
++    mrx[5] = cosf(rx); mrx[6] = sinf(rx); mrx[9] = -sinf(rx); mrx[10] = cosf(rx);
++    lv_3d_mat4_identity(mry);
++    mry[0] = cosf(ry); mry[2] = -sinf(ry); mry[8] = sinf(ry); mry[10] = cosf(ry);
++    lv_3d_mat4_identity(mrz);
++    mrz[0] = cosf(rz); mrz[1] = -sinf(rz); mrz[4] = sinf(rz); mrz[5] = cosf(rz);
++
++    lv_3d_mat4_mul(tmp, mrx, ms);
++    lv_3d_mat4_mul(t->local, mry, tmp);
++    lv_3d_mat4_mul(tmp, mrz, t->local);
++    lv_3d_mat4_mul(t->local, mt, tmp);
++    t->dirty = true;
++}
++
++void lv_3d_transform_update_world(lv_3d_transform_t * t, const float parent_world[16])
++{
++    lv_3d_mat4_mul(t->world, parent_world, t->local);
++    t->dirty = false;
++}
++
++#endif /*LV_USE_3D*/
+diff --git a/src/draw/gpu_composite/lv_draw_gpu_composite.c b/src/draw/gpu_composite/lv_draw_gpu_composite.c
+new file mode 100644
+index 000000000..943430f39
+--- /dev/null
++++ b/src/draw/gpu_composite/lv_draw_gpu_composite.c
+@@ -0,0 +1,475 @@
++/**
++ * @file lv_draw_gpu_composite.c — LVGL draw unit + frame composite
++ */
++
++#include "lv_draw_gpu_composite.h"
++
++#if LV_USE_DRAW_GPU_COMPOSITE
++
++#if LV_USE_DRAW_OPENGLES || LV_USE_DRAW_NANOVG
++    #error "LV_USE_DRAW_GPU_COMPOSITE cannot be combined with OPENGLES or NANOVG draw units"
++#endif
++
++#include "lv_gpu_composite_caps.h"
++#include "lv_gpu_composite_gles2_3d.h"
++#include "../lv_draw_private.h"
++#include "../../core/lv_refr_private.h"
++#include "../../display/lv_display_private.h"
++#include "../../drivers/opengles/lv_opengles_debug.h"
++#include "../../drivers/opengles/lv_opengles_driver.h"
++#include "../../drivers/opengles/lv_opengles_private.h"
++#include "../../drivers/opengles/lv_opengles_texture_private.h"
++#include "../../misc/lv_area.h"
++#include "../../misc/lv_color.h"
++#include "../../include/lvgl/draw/lv_draw_3d.h"
++#include "../../3d/lv_3d_internal.h"
++#include "../../widgets/3d/lv_3dviewport_private.h"
++
++#define DRAW_UNIT_ID_GPU_COMPOSITE 11
++#define LV_GPU_COMPOSITE_MAX_VP 8
++
++typedef struct {
++    lv_obj_t * scene;
++    lv_obj_t * camera;
++    lv_area_t area;
++} lv_gpu_composite_vp_t;
++
++typedef struct {
++    lv_draw_unit_t base_unit;
++    lv_draw_task_t * task_act;
++    lv_gpu_composite_caps_t caps;
++} lv_draw_gpu_composite_unit_t;
++
++static lv_draw_gpu_composite_unit_t * g_unit;
++static lv_gpu_composite_vp_t vp_queue[LV_GPU_COMPOSITE_MAX_VP];
++static lv_gpu_composite_vp_t vp_persist[LV_GPU_COMPOSITE_MAX_VP];
++static uint32_t vp_queue_count;
++static uint32_t vp_persist_count;
++static unsigned int g_last_flush_tex_id;
++static lv_gpu_composite_frame_cb_t g_frame_ready_cb;
++static uint32_t g_last_flush_item_count;
++static uint32_t g_last_flush_vp_count;
++static uint8_t g_last_frame_max_alpha;
++static uint32_t g_flush_serial;
++
++static int32_t gpu_composite_evaluate(lv_draw_unit_t * draw_unit, lv_draw_task_t * task);
++static int32_t gpu_composite_dispatch(lv_draw_unit_t * draw_unit, lv_layer_t * layer);
++static void gpu_composite_flush_internal(unsigned int tex_id, int32_t dw, int32_t dh);
++
++void lv_draw_gpu_composite_init(void)
++{
++    lv_draw_gpu_composite_unit_t * u = lv_draw_create_unit(sizeof(lv_draw_gpu_composite_unit_t));
++    u->base_unit.evaluate_cb = gpu_composite_evaluate;
++    u->base_unit.dispatch_cb = gpu_composite_dispatch;
++    u->base_unit.name = "GPU_COMPOSITE";
++    g_unit = u;
++    vp_queue_count = 0;
++}
++
++void lv_draw_gpu_composite_deinit(void)
++{
++#if LV_USE_3D
++    lv_gpu_composite_gles2_3d_deinit();
++#endif
++    g_unit = NULL;
++}
++
++static void gpu_composite_flush_internal(unsigned int tex_id, int32_t dw, int32_t dh)
++{
++    if(!g_unit || tex_id == 0) return;
++
++    if(vp_queue_count > 0) {
++        vp_persist_count = vp_queue_count;
++        for(uint32_t i = 0; i < vp_queue_count; i++) {
++            vp_persist[i] = vp_queue[i];
++        }
++    }
++
++    uint32_t count = vp_persist_count;
++    if(count == 0) return;
++
++    g_last_flush_tex_id = tex_id;
++    g_last_flush_vp_count = count;
++    g_last_flush_item_count = 0;
++    g_last_frame_max_alpha = 0;
++
++#if !LV_USE_EGL
++    GL_CALL(glBindVertexArray(0));
++    GL_CALL(glBindBuffer(GL_ARRAY_BUFFER, 0));
++    GL_CALL(glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0));
++    for(int ai = 0; ai < 4; ai++) {
++        GL_CALL(glDisableVertexAttribArray((unsigned int)ai));
++    }
++#endif
++
++    unsigned int depth_rb = 0;
++    GL_CALL(glGenRenderbuffers(1, &depth_rb));
++    GL_CALL(glBindRenderbuffer(GL_RENDERBUFFER, depth_rb));
++    GL_CALL(glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT16, dw, dh));
++
++    for(uint32_t v = 0; v < count; v++) {
++        lv_gpu_composite_vp_t * vp = &vp_persist[v];
++        lv_3d_draw_item_t items[LV_3D_MAX_DRAW_ITEMS];
++        uint32_t n = lv_3d_scene_collect(vp->scene, items, LV_3D_MAX_DRAW_ITEMS);
++
++        float view[16], proj[16];
++        lv_3d_camera_get_view_proj(vp->camera, dw, dh, view, proj);
++
++        int32_t vx = vp->area.x1;
++        int32_t vy = dh - vp->area.y2 - 1;
++        int32_t vw = lv_area_get_width(&vp->area);
++        int32_t vh = lv_area_get_height(&vp->area);
++
++        uint8_t vp_max_a = 0;
++        lv_gpu_composite_gles2_render_viewport(tex_id, depth_rb, vx, vy, vw, vh,
++                                               view, proj, items, n,
++                                               LV_GPU_COMPOSITE_AR_PASSTHROUGH, &vp_max_a);
++        if(vp_max_a > g_last_frame_max_alpha) g_last_frame_max_alpha = vp_max_a;
++        g_last_flush_item_count += n;
++    }
++
++    GL_CALL(glDeleteRenderbuffers(1, &depth_rb));
++    vp_queue_count = 0;
++    GL_CALL(glFinish());
++    g_flush_serial++;
++}
++
++void lv_gpu_composite_set_frame_ready_cb(lv_gpu_composite_frame_cb_t cb)
++{
++    g_frame_ready_cb = cb;
++}
++
++void lv_gpu_composite_notify_frame_ready(lv_display_t * disp)
++{
++    if(g_frame_ready_cb) g_frame_ready_cb(disp);
++}
++
++void lv_gpu_composite_flush_3d(lv_display_t * disp)
++{
++    int32_t dw = lv_display_get_horizontal_resolution(disp);
++    int32_t dh = lv_display_get_vertical_resolution(disp);
++    gpu_composite_flush_internal(lv_opengles_texture_get_texture_id(disp), dw, dh);
++}
++
++void lv_gpu_composite_flush_3d_to_tex(lv_display_t * disp, unsigned int tex_id, int32_t w, int32_t h)
++{
++    LV_UNUSED(disp);
++    gpu_composite_flush_internal(tex_id, w, h);
++}
++
++void lv_gpu_composite_overlay_2d_fb(lv_display_t * disp)
++{
++    int32_t w = lv_display_get_horizontal_resolution(disp);
++    int32_t h = lv_display_get_vertical_resolution(disp);
++    lv_gpu_composite_overlay_2d_to_tex(disp, 0, w, h);
++}
++
++#if LV_COLOR_DEPTH == 32
++static bool overlay_fb_has_visible_2d(const uint8_t * px, uint32_t stride, int32_t w, int32_t h, lv_color_format_t cf)
++{
++    for(int32_t y = 0; y < h; y += 32) {
++        for(int32_t x = 0; x < w; x += 32) {
++            const uint8_t * p = px + (uint32_t)y * stride + (uint32_t)x * 4;
++            if(lv_color_format_has_alpha(cf)) {
++                if(p[3] > 16) return true;
++            }
++            else if((p[0] | p[1] | p[2]) > 16) {
++                return true;
++            }
++        }
++    }
++    return false;
++}
++
++static bool overlay_upload_sw_tex(lv_opengles_texture_t * texture, lv_display_t * disp, int32_t w, int32_t h,
++                                  unsigned int * sw_tex_out)
++{
++    lv_color_format_t cf = lv_display_get_color_format(disp);
++    uint32_t stride = lv_draw_buf_width_to_stride(w, cf);
++    const uint8_t * px = texture->fb1;
++
++    if(!overlay_fb_has_visible_2d(px, stride, w, h, cf)) return false;
++
++    static unsigned int sw_tex;
++    if(sw_tex == 0) {
++        GL_CALL(glGenTextures(1, &sw_tex));
++    }
++
++    GL_CALL(glBindTexture(GL_TEXTURE_2D, sw_tex));
++    GL_CALL(glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST));
++    GL_CALL(glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST));
++    GL_CALL(glPixelStorei(GL_UNPACK_ALIGNMENT, 1));
++    GL_CALL(glPixelStorei(GL_UNPACK_ROW_LENGTH, stride / lv_color_format_get_size(cf)));
++    GL_CALL(glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_BGRA, GL_UNSIGNED_BYTE, texture->fb1));
++    GL_CALL(glBindTexture(GL_TEXTURE_2D, 0));
++    GL_CALL(glPixelStorei(GL_UNPACK_ROW_LENGTH, 0));
++
++    if(sw_tex_out) *sw_tex_out = sw_tex;
++    return true;
++}
++
++static void overlay_restore_default_fb_state(void)
++{
++    GL_CALL(glBindFramebuffer(GL_FRAMEBUFFER, 0));
++    GL_CALL(glPixelStorei(GL_UNPACK_ROW_LENGTH, 0));
++    GL_CALL(glUseProgram(0));
++    GL_CALL(glBindBuffer(GL_ARRAY_BUFFER, 0));
++    GL_CALL(glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0));
++#if defined(glBindVertexArray)
++    GL_CALL(glBindVertexArray(0));
++#endif
++    for(int ai = 0; ai < 4; ai++) {
++        GL_CALL(glDisableVertexAttribArray((unsigned int)ai));
++    }
++#if !LV_USE_EGL
++    {
++        GLenum draw_buf = GL_BACK;
++        GL_CALL(glDrawBuffers(1, &draw_buf));
++        GL_CALL(glReadBuffer(GL_BACK));
++    }
++#endif
++}
++#endif /*LV_COLOR_DEPTH == 32*/
++
++void lv_gpu_composite_overlay_2d_screen(lv_display_t * disp, int32_t w, int32_t h)
++{
++#if LV_COLOR_DEPTH != 32
++    LV_UNUSED(disp);
++    LV_UNUSED(w);
++    LV_UNUSED(h);
++    return;
++#else
++    lv_opengles_texture_t * texture = lv_display_get_driver_data(disp);
++    if(!texture || !texture->fb1 || w < 1 || h < 1) return;
++
++    unsigned int sw_tex = 0;
++    if(!overlay_upload_sw_tex(texture, disp, w, h, &sw_tex)) return;
++
++    GL_CALL(glBindFramebuffer(GL_FRAMEBUFFER, 0));
++#if !LV_USE_EGL
++    {
++        GLenum draw_buf = GL_BACK;
++        GL_CALL(glDrawBuffers(1, &draw_buf));
++        GL_CALL(glReadBuffer(GL_BACK));
++    }
++#endif
++
++    lv_area_t full = { 0, 0, w - 1, h - 1 };
++    lv_opengles_reinit_state();
++    lv_opengles_render_texture_rbswap(sw_tex, &full, LV_OPA_COVER, w, h, &full, false, false);
++    overlay_restore_default_fb_state();
++#endif
++}
++
++void lv_gpu_composite_overlay_2d_to_tex(lv_display_t * disp, unsigned int tex_id, int32_t w, int32_t h)
++{
++    lv_opengles_texture_t * texture = lv_display_get_driver_data(disp);
++    if(!texture || !texture->fb1) return;
++
++    if(tex_id == 0) tex_id = texture->texture_id;
++    if(tex_id == 0) return;
++
++    if(w < 1 || h < 1) return;
++
++#if LV_COLOR_DEPTH != 32
++    return;
++#else
++    unsigned int sw_tex = 0;
++    if(!overlay_upload_sw_tex(texture, disp, w, h, &sw_tex)) return;
++
++    unsigned int fbo = 0;
++    GL_CALL(glGenFramebuffers(1, &fbo));
++    GL_CALL(glBindFramebuffer(GL_FRAMEBUFFER, fbo));
++    GL_CALL(glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex_id, 0));
++
++#if !LV_USE_EGL
++    {
++        GLenum draw_buf = GL_COLOR_ATTACHMENT0;
++        GL_CALL(glDrawBuffers(1, &draw_buf));
++        GL_CALL(glReadBuffer(GL_COLOR_ATTACHMENT0));
++    }
++#endif
++
++    lv_area_t full = { 0, 0, w - 1, h - 1 };
++    lv_opengles_reinit_state();
++    lv_opengles_render_texture_rbswap(sw_tex, &full, LV_OPA_COVER, w, h, &full, false, false);
++
++    GL_CALL(glDeleteFramebuffers(1, &fbo));
++    overlay_restore_default_fb_state();
++#endif
++}
++
++static unsigned int verify_bind_tex_fbo(lv_display_t * disp, int32_t * w_out, int32_t * h_out)
++{
++    unsigned int tex_id = g_last_flush_tex_id;
++    if(tex_id == 0) tex_id = lv_opengles_texture_get_texture_id(disp);
++    if(tex_id == 0) return 0;
++
++    int32_t w = lv_display_get_horizontal_resolution(disp);
++    int32_t h = lv_display_get_vertical_resolution(disp);
++    if(w < 16 || h < 16) return 0;
++
++    unsigned int fbo = 0;
++    GL_CALL(glGenFramebuffers(1, &fbo));
++    GL_CALL(glBindFramebuffer(GL_FRAMEBUFFER, fbo));
++    GL_CALL(glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex_id, 0));
++
++#if !LV_USE_EGL
++    GL_CALL(glReadBuffer(GL_COLOR_ATTACHMENT0));
++#endif
++
++    if(w_out) *w_out = w;
++    if(h_out) *h_out = h;
++    return fbo;
++}
++
++static void verify_unbind_fbo(unsigned int fbo)
++{
++    GL_CALL(glBindFramebuffer(GL_FRAMEBUFFER, 0));
++    if(fbo) GL_CALL(glDeleteFramebuffers(1, &fbo));
++}
++
++static void verify_read_rgba(int32_t w, int32_t h, int lv_x, int lv_y, uint8_t rgba[4])
++{
++    int gl_x = lv_x;
++    int gl_y = h - 1 - lv_y;
++    if(gl_x < 0) gl_x = 0;
++    if(gl_y < 0) gl_y = 0;
++    if(gl_x >= w) gl_x = w - 1;
++    if(gl_y >= h) gl_y = h - 1;
++    GL_CALL(glReadPixels(gl_x, gl_y, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, rgba));
++}
++
++bool lv_gpu_composite_verify_alpha(lv_display_t * disp, uint8_t * min_alpha_out, uint32_t * opaque_count_out)
++{
++    lv_gpu_composite_verify_stats_t stats;
++    if(!lv_gpu_composite_verify_stats(disp, &stats)) return false;
++    if(min_alpha_out) *min_alpha_out = stats.corner_min_alpha;
++    if(opaque_count_out) *opaque_count_out = stats.corner_opaque_count;
++    return true;
++}
++
++bool lv_gpu_composite_verify_stats(lv_display_t * disp, lv_gpu_composite_verify_stats_t * stats)
++{
++    if(!stats) return false;
++    lv_memzero(stats, sizeof(*stats));
++
++    int32_t w, h;
++    unsigned int fbo = verify_bind_tex_fbo(disp, &w, &h);
++    if(!fbo) return false;
++
++    stats->corner_min_alpha = 255;
++    static const int corner_lv[8][2] = {{2, 2}, {0, 2}, {-3, 2}, {2, 0}, {-3, 0}, {2, -3}, {0, -3}, {-3, -3}};
++    for(int i = 0; i < 8; i++) {
++        int lv_x = corner_lv[i][0] >= 0 ? corner_lv[i][0] : w + corner_lv[i][0];
++        int lv_y = corner_lv[i][1] >= 0 ? corner_lv[i][1] : h + corner_lv[i][1];
++        uint8_t px[4];
++        verify_read_rgba(w, h, lv_x, lv_y, px);
++        if(px[3] < stats->corner_min_alpha) stats->corner_min_alpha = px[3];
++        if(px[3] > 128) stats->corner_opaque_count++;
++    }
++
++    verify_read_rgba(w, h, w / 2, h / 2, stats->center_rgba);
++    stats->region_max_alpha = 0;
++
++    const int grid_x = 48;
++    const int grid_y = 27;
++    int32_t x0 = w / 20;
++    int32_t y0 = h / 20;
++    int32_t x1 = w - 1 - x0;
++    int32_t y1 = h - 1 - y0;
++
++    for(int gy = 0; gy < grid_y; gy++) {
++        for(int gx = 0; gx < grid_x; gx++) {
++            int32_t lv_x = x0 + (int32_t)((int64_t)(x1 - x0) * gx / (grid_x - 1));
++            int32_t lv_y = y0 + (int32_t)((int64_t)(y1 - y0) * gy / (grid_y - 1));
++            uint8_t px[4];
++            verify_read_rgba(w, h, lv_x, lv_y, px);
++            stats->region_samples++;
++            if(px[3] > stats->region_max_alpha) stats->region_max_alpha = px[3];
++            if(px[3] >= 32) stats->region_visible_count++;
++            if(px[3] >= 128) stats->region_opaque_count++;
++            if(px[3] >= 32 && px[1] > px[0] + 8 && px[1] > px[2] + 8) stats->region_greenish_count++;
++            if(px[3] >= 128 && (uint32_t)px[0] + px[1] + px[2] >= 64) stats->region_colorful_count++;
++        }
++    }
++
++    GL_CALL(glFinish());
++    verify_unbind_fbo(fbo);
++    stats->last_flush_items = g_last_flush_item_count;
++    stats->last_flush_viewports = g_last_flush_vp_count;
++    stats->flush_max_alpha = g_last_frame_max_alpha;
++    stats->flush_serial = g_flush_serial;
++    if(stats->region_max_alpha < stats->flush_max_alpha) {
++        stats->region_max_alpha = stats->flush_max_alpha;
++    }
++    return true;
++}
++
++static int32_t gpu_composite_evaluate(lv_draw_unit_t * draw_unit, lv_draw_task_t * task)
++{
++    LV_UNUSED(draw_unit);
++    if(lv_refr_get_disp_refreshing() == NULL) return 0;
++
++    if(task->type == LV_DRAW_TASK_TYPE_3D) {
++        task->preference_score = 0;
++        task->preferred_draw_unit_id = DRAW_UNIT_ID_GPU_COMPOSITE;
++    }
++    return 0;
++}
++
++static int32_t gpu_composite_dispatch(lv_draw_unit_t * draw_unit, lv_layer_t * layer)
++{
++    lv_draw_gpu_composite_unit_t * u = (lv_draw_gpu_composite_unit_t *)draw_unit;
++    if(u->task_act) return 0;
++
++    lv_draw_task_t * t = lv_draw_get_available_task(layer, NULL, DRAW_UNIT_ID_GPU_COMPOSITE);
++    if(t == NULL) return LV_DRAW_UNIT_IDLE;
++    if(t->preferred_draw_unit_id != DRAW_UNIT_ID_GPU_COMPOSITE) return LV_DRAW_UNIT_IDLE;
++
++    lv_draw_3d_dsc_t * dsc = lv_draw_task_get_3d_dsc(t);
++    if(!dsc) return LV_DRAW_UNIT_IDLE;
++
++#if LV_USE_3D
++    if(dsc->kind == LV_3D_DRAW_KIND_VIEWPORT_PASS && dsc->scene && dsc->camera) {
++        if(vp_queue_count < LV_GPU_COMPOSITE_MAX_VP) {
++            bool dup = false;
++            for(uint32_t qi = 0; qi < vp_queue_count; qi++) {
++                lv_gpu_composite_vp_t * q = &vp_queue[qi];
++                if(q->scene == dsc->scene && q->camera == dsc->camera
++                   && q->area.x1 == dsc->viewport_area.x1 && q->area.y1 == dsc->viewport_area.y1
++                   && q->area.x2 == dsc->viewport_area.x2 && q->area.y2 == dsc->viewport_area.y2) {
++                    dup = true;
++                    break;
++                }
++            }
++            if(!dup) {
++                vp_queue[vp_queue_count].scene = dsc->scene;
++                vp_queue[vp_queue_count].camera = dsc->camera;
++                vp_queue[vp_queue_count].area = dsc->viewport_area;
++                vp_queue_count++;
++            }
++        }
++    }
++#endif
++
++    t->state = LV_DRAW_TASK_STATE_IN_PROGRESS;
++    u->task_act = t;
++    t->state = LV_DRAW_TASK_STATE_FINISHED;
++    u->task_act = NULL;
++    lv_draw_dispatch_request();
++    return 1;
++}
++
++void lv_gpu_composite_caps_probe_on_context(void)
++{
++    if(g_unit) {
++        lv_gpu_composite_caps_probe(&g_unit->caps);
++        lv_gpu_composite_caps_log(&g_unit->caps);
++#if LV_USE_3D
++        lv_gpu_composite_gles2_3d_init();
++#endif
++    }
++}
++
++#endif /*LV_USE_DRAW_GPU_COMPOSITE*/
+diff --git a/src/draw/gpu_composite/lv_draw_gpu_composite.h b/src/draw/gpu_composite/lv_draw_gpu_composite.h
+new file mode 100644
+index 000000000..163a0b54c
+--- /dev/null
++++ b/src/draw/gpu_composite/lv_draw_gpu_composite.h
+@@ -0,0 +1,66 @@
++/**
++ * @file lv_draw_gpu_composite.h
++ */
++
++#ifndef LV_DRAW_GPU_COMPOSITE_H
++#define LV_DRAW_GPU_COMPOSITE_H
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++#include "../../lv_conf_internal.h"
++
++#if LV_USE_DRAW_GPU_COMPOSITE
++
++#include "../../display/lv_display.h"
++
++void lv_draw_gpu_composite_init(void);
++void lv_draw_gpu_composite_deinit(void);
++
++/** Called from display flush: render queued 3D viewports. tex_id=0 uses display driver texture. */
++void lv_gpu_composite_flush_3d(lv_display_t * disp);
++void lv_gpu_composite_flush_3d_to_tex(lv_display_t * disp, unsigned int tex_id, int32_t w, int32_t h);
++
++/** Alpha-blend SW framebuffer (2D/cursor) on top of the GPU texture after 3D pass. */
++void lv_gpu_composite_overlay_2d_fb(lv_display_t * disp);
++void lv_gpu_composite_overlay_2d_to_tex(lv_display_t * disp, unsigned int tex_id, int32_t w, int32_t h);
++/** Alpha-blend 2D/cursor on the default framebuffer (after 3D texture blit). */
++void lv_gpu_composite_overlay_2d_screen(lv_display_t * disp, int32_t w, int32_t h);
++
++/** Read back alpha stats for LVGL_VERIFY (returns min alpha in corner samples). */
++bool lv_gpu_composite_verify_alpha(lv_display_t * disp, uint8_t * min_alpha_out, uint32_t * opaque_count_out);
++
++typedef struct {
++    uint8_t corner_min_alpha;
++    uint32_t corner_opaque_count;
++    uint32_t region_samples;
++    uint32_t region_visible_count;   /**< alpha >= 32 */
++    uint32_t region_opaque_count;    /**< alpha >= 128 */
++    uint32_t region_greenish_count;  /**< visible && g > r+8 && g > b+8 */
++    uint32_t region_colorful_count;  /**< opaque && (r+g+b) >= 64 */
++    uint8_t center_rgba[4];          /**< RGBA at screen center (GL readback order) */
++    uint8_t region_max_alpha;        /**< max alpha in sampled region */
++    uint8_t flush_max_alpha;         /**< max alpha probed right after 3D flush */
++    uint32_t last_flush_items;       /**< meshes rendered in last 3D flush */
++    uint32_t last_flush_viewports;   /**< viewports in last 3D flush */
++    uint32_t flush_serial;           /**< incremented on each successful 3D flush */
++} lv_gpu_composite_verify_stats_t;
++
++/** Corner alpha + center-region content sampling for LVGL_VERIFY. */
++bool lv_gpu_composite_verify_stats(lv_display_t * disp, lv_gpu_composite_verify_stats_t * stats);
++
++typedef void (*lv_gpu_composite_frame_cb_t)(lv_display_t * disp);
++void lv_gpu_composite_set_frame_ready_cb(lv_gpu_composite_frame_cb_t cb);
++void lv_gpu_composite_notify_frame_ready(lv_display_t * disp);
++
++/** Call after GL context is current (from lv_opengles_init). */
++void lv_gpu_composite_caps_probe_on_context(void);
++
++#endif /*LV_USE_DRAW_GPU_COMPOSITE*/
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif /*LV_DRAW_GPU_COMPOSITE_H*/
+diff --git a/src/draw/gpu_composite/lv_gpu_composite_caps.c b/src/draw/gpu_composite/lv_gpu_composite_caps.c
+new file mode 100644
+index 000000000..0f149032b
+--- /dev/null
++++ b/src/draw/gpu_composite/lv_gpu_composite_caps.c
+@@ -0,0 +1,36 @@
++/**
++ * @file lv_gpu_composite_caps.c
++ */
++
++#include "lv_gpu_composite_caps.h"
++
++#if LV_USE_DRAW_GPU_COMPOSITE
++
++#include "../../drivers/opengles/lv_opengles_debug.h"
++#include "../../drivers/opengles/lv_opengles_private.h"
++#include <string.h>
++
++void lv_gpu_composite_caps_probe(lv_gpu_composite_caps_t * caps)
++{
++    lv_memzero(caps, sizeof(*caps));
++    const char * ver = (const char *)glGetString(GL_VERSION);
++    if(ver && ver[0] == '2') caps->gles_major = 2;
++    else if(ver && ver[0] == '3') caps->gles_major = 3;
++    else caps->gles_major = 2;
++
++    caps->has_fbo = true;
++    caps->has_depth16 = true;
++    glGetIntegerv(GL_MAX_TEXTURE_SIZE, &caps->max_texture_size);
++}
++
++void lv_gpu_composite_caps_log(const lv_gpu_composite_caps_t * caps)
++{
++#if LV_GPU_COMPOSITE_LOG_CAPS
++    LV_LOG_USER("LVGL caps: GLES%u fbo=%d depth16=%d max_tex=%d",
++                (unsigned)caps->gles_major, caps->has_fbo, caps->has_depth16, caps->max_texture_size);
++#else
++    LV_UNUSED(caps);
++#endif
++}
++
++#endif /*LV_USE_DRAW_GPU_COMPOSITE*/
+diff --git a/src/draw/gpu_composite/lv_gpu_composite_caps.h b/src/draw/gpu_composite/lv_gpu_composite_caps.h
+new file mode 100644
+index 000000000..a2ca55286
+--- /dev/null
++++ b/src/draw/gpu_composite/lv_gpu_composite_caps.h
+@@ -0,0 +1,32 @@
++/**
++ * @file lv_gpu_composite_caps.h
++ */
++
++#ifndef LV_GPU_COMPOSITE_CAPS_H
++#define LV_GPU_COMPOSITE_CAPS_H
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++#include "../../lv_conf_internal.h"
++
++#if LV_USE_DRAW_GPU_COMPOSITE
++
++typedef struct {
++    uint8_t gles_major;
++    bool has_fbo;
++    bool has_depth16;
++    int32_t max_texture_size;
++} lv_gpu_composite_caps_t;
++
++void lv_gpu_composite_caps_probe(lv_gpu_composite_caps_t * caps);
++void lv_gpu_composite_caps_log(const lv_gpu_composite_caps_t * caps);
++
++#endif /*LV_USE_DRAW_GPU_COMPOSITE*/
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif /*LV_GPU_COMPOSITE_CAPS_H*/
+diff --git a/src/draw/gpu_composite/lv_gpu_composite_gles2_3d.c b/src/draw/gpu_composite/lv_gpu_composite_gles2_3d.c
+new file mode 100644
+index 000000000..bd949e6e1
+--- /dev/null
++++ b/src/draw/gpu_composite/lv_gpu_composite_gles2_3d.c
+@@ -0,0 +1,257 @@
++/**
++ * @file lv_gpu_composite_gles2_3d.c — GLES2 wireframe box renderer [GL2]
++ */
++
++#include "lv_gpu_composite_gles2_3d.h"
++
++#if LV_USE_DRAW_GPU_COMPOSITE && LV_USE_3D
++
++#include "../../drivers/opengles/lv_opengles_debug.h"
++#include "../../drivers/opengles/lv_opengles_private.h"
++#include "../../misc/lv_color.h"
++#include <stdlib.h>
++#include <string.h>
++
++static unsigned int prog;
++static int loc_mvp;
++static int loc_color;
++
++#if LV_USE_EGL
++static const char * vs_src =
++    "attribute vec3 a_pos;\n"
++    "uniform mat4 u_mvp;\n"
++    "void main() { gl_Position = u_mvp * vec4(a_pos, 1.0); }\n";
++
++static const char * fs_src =
++    "precision mediump float;\n"
++    "uniform vec4 u_color;\n"
++    "void main() { gl_FragColor = u_color; }\n";
++#else
++static const char * vs_src =
++    "#version 120\n"
++    "attribute vec3 a_pos;\n"
++    "uniform mat4 u_mvp;\n"
++    "void main() { gl_Position = u_mvp * vec4(a_pos, 1.0); }\n";
++
++static const char * fs_src =
++    "#version 120\n"
++    "uniform vec4 u_color;\n"
++    "void main() { gl_FragColor = u_color; }\n";
++#endif
++
++static bool shader_ok(unsigned int sh)
++{
++    int ok = 0;
++    GL_CALL(glGetShaderiv(sh, GL_COMPILE_STATUS, &ok));
++    if(!ok) {
++        char log[512];
++        log[0] = '\0';
++        glGetShaderInfoLog(sh, sizeof(log), NULL, log);
++        LV_LOG_ERROR("LVGL shader compile failed: %s", log);
++    }
++    return ok != 0;
++}
++
++static unsigned int compile_shader(unsigned int type, const char * src)
++{
++    unsigned int sh = glCreateShader(type);
++    GL_CALL(glShaderSource(sh, 1, &src, NULL));
++    GL_CALL(glCompileShader(sh));
++    if(!shader_ok(sh)) {
++        GL_CALL(glDeleteShader(sh));
++        return 0;
++    }
++    return sh;
++}
++
++static unsigned int link_program(const char * vs, const char * fs)
++{
++    unsigned int v = compile_shader(GL_VERTEX_SHADER, vs);
++    unsigned int f = compile_shader(GL_FRAGMENT_SHADER, fs);
++    if(!v || !f) {
++        if(v) GL_CALL(glDeleteShader(v));
++        if(f) GL_CALL(glDeleteShader(f));
++        return 0;
++    }
++    unsigned int p = glCreateProgram();
++    GL_CALL(glAttachShader(p, v));
++    GL_CALL(glAttachShader(p, f));
++    GL_CALL(glBindAttribLocation(p, 0, "a_pos"));
++    GL_CALL(glLinkProgram(p));
++    GL_CALL(glDeleteShader(v));
++    GL_CALL(glDeleteShader(f));
++
++    int ok = 0;
++    GL_CALL(glGetProgramiv(p, GL_LINK_STATUS, &ok));
++    if(!ok) {
++        char log[512];
++        log[0] = '\0';
++        glGetProgramInfoLog(p, sizeof(log), NULL, log);
++        LV_LOG_ERROR("LVGL shader link failed: %s", log);
++        GL_CALL(glDeleteProgram(p));
++        return 0;
++    }
++    return p;
++}
++
++void lv_gpu_composite_gles2_3d_init(void)
++{
++    if(prog) return;
++    prog = link_program(vs_src, fs_src);
++    if(!prog) return;
++    loc_mvp = glGetUniformLocation(prog, "u_mvp");
++    loc_color = glGetUniformLocation(prog, "u_color");
++}
++
++void lv_gpu_composite_gles2_3d_deinit(void)
++{
++    if(prog) {
++        GL_CALL(glDeleteProgram(prog));
++        prog = 0;
++    }
++}
++
++static void box_wire_verts(float w, float h, float d, float * out24)
++{
++    float hx = w * 0.5f, hy = h * 0.5f, hz = d * 0.5f;
++    const float v[8][3] = {
++        {-hx, -hy, -hz}, { hx, -hy, -hz}, { hx,  hy, -hz}, {-hx,  hy, -hz},
++        {-hx, -hy,  hz}, { hx, -hy,  hz}, { hx,  hy,  hz}, {-hx,  hy,  hz},
++    };
++    static const int edges[24] = {
++        0,1, 1,2, 2,3, 3,0, 4,5, 5,6, 6,7, 7,4, 0,4, 1,5, 2,6, 3,7
++    };
++    for(int i = 0; i < 24; i++) {
++        out24[i * 3 + 0] = v[edges[i]][0];
++        out24[i * 3 + 1] = v[edges[i]][1];
++        out24[i * 3 + 2] = v[edges[i]][2];
++    }
++}
++
++static void box_solid_verts(float w, float h, float d, float * out108)
++{
++    float hx = w * 0.5f, hy = h * 0.5f, hz = d * 0.5f;
++    const float v[8][3] = {
++        {-hx, -hy, -hz}, { hx, -hy, -hz}, { hx,  hy, -hz}, {-hx,  hy, -hz},
++        {-hx, -hy,  hz}, { hx, -hy,  hz}, { hx,  hy,  hz}, {-hx,  hy,  hz},
++    };
++    static const int faces[36] = {
++        0,1,2, 0,2,3, 5,4,7, 5,7,6, 4,0,3, 4,3,7,
++        1,5,6, 1,6,2, 3,2,6, 3,6,7, 4,5,1, 4,1,0
++    };
++    for(int i = 0; i < 36; i++) {
++        out108[i * 3 + 0] = v[faces[i]][0];
++        out108[i * 3 + 1] = v[faces[i]][1];
++        out108[i * 3 + 2] = v[faces[i]][2];
++    }
++}
++
++static void draw_item(const lv_3d_draw_item_t * it, const float view[16], const float proj[16])
++{
++    float mvp[16], mv[16];
++    lv_3d_mat4_mul(mv, view, it->transform.world);
++    lv_3d_mat4_mul(mvp, proj, mv);
++    GL_CALL(glUniformMatrix4fv(loc_mvp, 1, GL_FALSE, mvp));
++
++    lv_color32_t c32 = lv_color_to_32(it->material.color, it->material.opa);
++    GL_CALL(glUniform4f(loc_color, c32.red / 255.0f, c32.green / 255.0f, c32.blue / 255.0f,
++                        c32.alpha / 255.0f));
++
++    float verts[108];
++    if(it->wireframe || it->material.kind == LV_3D_MAT_WIREFRAME) {
++        box_solid_verts(it->w, it->h, it->d, verts);
++        GL_CALL(glEnableVertexAttribArray(0));
++        GL_CALL(glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, verts));
++        GL_CALL(glUniform4f(loc_color, c32.red / 255.0f, c32.green / 255.0f, c32.blue / 255.0f, 0.08f));
++        GL_CALL(glDrawArrays(GL_TRIANGLES, 0, 36));
++        box_wire_verts(it->w, it->h, it->d, verts);
++        GL_CALL(glUniform4f(loc_color, c32.red / 255.0f, c32.green / 255.0f, c32.blue / 255.0f,
++                            c32.alpha / 255.0f));
++        GL_CALL(glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, verts));
++        GL_CALL(glLineWidth(2.0f));
++        GL_CALL(glDrawArrays(GL_LINES, 0, 24));
++        GL_CALL(glDisableVertexAttribArray(0));
++    }
++    else {
++        box_solid_verts(it->w, it->h, it->d, verts);
++        GL_CALL(glEnableVertexAttribArray(0));
++        GL_CALL(glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, verts));
++        GL_CALL(glDrawArrays(GL_TRIANGLES, 0, 36));
++        GL_CALL(glDisableVertexAttribArray(0));
++    }
++}
++
++void lv_gpu_composite_gles2_render_viewport(unsigned int color_tex, unsigned int depth_rb,
++                                            int32_t x, int32_t y, int32_t w, int32_t h,
++                                            const float view[16], const float proj[16],
++                                            const lv_3d_draw_item_t * items, uint32_t item_count,
++                                            bool ar_passthrough, uint8_t * max_alpha_out)
++{
++    if(max_alpha_out) *max_alpha_out = 0;
++    if(!prog) lv_gpu_composite_gles2_3d_init();
++    if(!prog) return;
++
++    GL_CALL(glBindTexture(GL_TEXTURE_2D, 0));
++
++    unsigned int fbo = 0;
++    GL_CALL(glGenFramebuffers(1, &fbo));
++    GL_CALL(glBindFramebuffer(GL_FRAMEBUFFER, fbo));
++    GL_CALL(glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, color_tex, 0));
++    if(depth_rb) {
++        GL_CALL(glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, depth_rb));
++    }
++
++    if(glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
++        LV_LOG_ERROR("LVGL FBO incomplete");
++        GL_CALL(glBindFramebuffer(GL_FRAMEBUFFER, 0));
++        GL_CALL(glDeleteFramebuffers(1, &fbo));
++        return;
++    }
++
++#if !LV_USE_EGL
++    {
++        GLenum draw_buf = GL_COLOR_ATTACHMENT0;
++        GL_CALL(glDrawBuffers(1, &draw_buf));
++        GL_CALL(glReadBuffer(GL_COLOR_ATTACHMENT0));
++    }
++#endif
++
++    GL_CALL(glViewport(x, y, w, h));
++    GL_CALL(glEnable(GL_SCISSOR_TEST));
++    GL_CALL(glScissor(x, y, w, h));
++
++    if(ar_passthrough) {
++        GL_CALL(glClearColor(0, 0, 0, 0));
++    }
++    else {
++        GL_CALL(glClearColor(0, 0, 0, 1));
++    }
++    GL_CALL(glClear(GL_COLOR_BUFFER_BIT));
++    GL_CALL(glDisable(GL_DEPTH_TEST));
++    GL_CALL(glEnable(GL_BLEND));
++    GL_CALL(glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA));
++
++    GL_CALL(glUseProgram(prog));
++
++    for(uint32_t i = 0; i < item_count; i++) {
++        draw_item(&items[i], view, proj);
++    }
++
++    if(max_alpha_out) {
++        uint8_t probe[4];
++        static const int ppts[9][2] = {{0, 0}, {1, 0}, {-1, 0}, {0, 1}, {0, -1},
++                                       {1, 1}, {-1, 1}, {1, -1}, {-1, -1}};
++        for(int pi = 0; pi < 9; pi++) {
++            int px = x + w / 2 + ppts[pi][0] * (w / 8);
++            int py = y + h / 2 + ppts[pi][1] * (h / 8);
++            GL_CALL(glReadPixels(px, py, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, probe));
++            if(probe[3] > *max_alpha_out) *max_alpha_out = probe[3];
++        }
++    }
++
++    GL_CALL(glDisable(GL_SCISSOR_TEST));
++    GL_CALL(glBindFramebuffer(GL_FRAMEBUFFER, 0));
++    GL_CALL(glDeleteFramebuffers(1, &fbo));
++}
++
++#endif /*LV_USE_DRAW_GPU_COMPOSITE && LV_USE_3D*/
+diff --git a/src/draw/gpu_composite/lv_gpu_composite_gles2_3d.h b/src/draw/gpu_composite/lv_gpu_composite_gles2_3d.h
+new file mode 100644
+index 000000000..8623359f3
+--- /dev/null
++++ b/src/draw/gpu_composite/lv_gpu_composite_gles2_3d.h
+@@ -0,0 +1,33 @@
++/**
++ * @file lv_gpu_composite_gles2_3d.h
++ */
++
++#ifndef LV_GPU_COMPOSITE_GLES2_3D_H
++#define LV_GPU_COMPOSITE_GLES2_3D_H
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++#include "../../lv_conf_internal.h"
++
++#if LV_USE_DRAW_GPU_COMPOSITE && LV_USE_3D
++
++#include "../../3d/lv_3d_internal.h"
++
++void lv_gpu_composite_gles2_3d_init(void);
++void lv_gpu_composite_gles2_3d_deinit(void);
++
++void lv_gpu_composite_gles2_render_viewport(unsigned int color_tex, unsigned int depth_rb,
++                                            int32_t x, int32_t y, int32_t w, int32_t h,
++                                            const float view[16], const float proj[16],
++                                            const lv_3d_draw_item_t * items, uint32_t item_count,
++                                            bool ar_passthrough, uint8_t * max_alpha_out);
++
++#endif
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif /*LV_GPU_COMPOSITE_GLES2_3D_H*/
+diff --git a/src/draw/lv_draw.c b/src/draw/lv_draw.c
+index 0dcdfecf1..7419c9fda 100644
+--- a/src/draw/lv_draw.c
++++ b/src/draw/lv_draw.c
+@@ -655,7 +655,7 @@ static inline size_t get_draw_dsc_size(lv_draw_task_type_t type)
+         case LV_DRAW_TASK_TYPE_VECTOR:
+             return sizeof(lv_draw_vector_dsc_t);
+ #endif
+-#if LV_USE_3DTEXTURE
++#if LV_USE_3DTEXTURE || LV_USE_3D
+         case LV_DRAW_TASK_TYPE_3D:
+             return sizeof(lv_draw_3d_dsc_t);
+ #endif
+diff --git a/src/draw/lv_draw_3d.c b/src/draw/lv_draw_3d.c
+index be023cf19..ad85e2923 100644
+--- a/src/draw/lv_draw_3d.c
++++ b/src/draw/lv_draw_3d.c
+@@ -1,46 +1,28 @@
+ /**
+  * @file lv_draw_3d.c
+- *
+  */
+ 
+-/*********************
+- *      INCLUDES
+- *********************/
+-
+ #include "lv_draw_private.h"
+ 
+-#if LV_USE_3DTEXTURE
+-
+-/*********************
+- *      DEFINES
+- *********************/
+-
+-/**********************
+- *      TYPEDEFS
+- **********************/
+-
+-/**********************
+- *  STATIC PROTOTYPES
+- **********************/
+-
+-/**********************
+- *  STATIC VARIABLES
+- **********************/
++#if LV_USE_3DTEXTURE || LV_USE_3D
+ 
+-/**********************
+- *      MACROS
+- **********************/
+-
+-/**********************
+- *   GLOBAL FUNCTIONS
+- **********************/
++#if LV_USE_3D
++#include "../../include/lvgl/3d/lv_3d.h"
++#endif
+ 
+ void lv_draw_3d_dsc_init(lv_draw_3d_dsc_t * dsc)
+ {
+     lv_memzero(dsc, sizeof(lv_draw_3d_dsc_t));
++#if LV_USE_3DTEXTURE
+     dsc->tex_id = LV_3DTEXTURE_ID_NULL;
+     dsc->h_flip = false;
+     dsc->v_flip = false;
++#endif
++#if LV_USE_3D
++    dsc->kind = LV_3D_DRAW_KIND_VIEWPORT_PASS;
++    dsc->mesh_id = LV_3D_MESH_ID_NONE;
++    lv_3d_material_init(&dsc->material, LV_3D_MAT_OPAQUE, lv_color_white(), LV_OPA_COVER);
++#endif
+     dsc->opa = LV_OPA_COVER;
+     dsc->base.dsc_size = sizeof(lv_draw_3d_dsc_t);
+ }
+@@ -55,16 +37,10 @@ void lv_draw_3d(lv_layer_t * layer, const lv_draw_3d_dsc_t * dsc, const lv_area_
+     LV_PROFILER_DRAW_BEGIN;
+ 
+     lv_draw_task_t * t = lv_draw_add_task(layer, coords, LV_DRAW_TASK_TYPE_3D);
+-
+     lv_memcpy(t->draw_dsc, dsc, sizeof(*dsc));
+-
+     lv_draw_finalize_task_creation(layer, t);
+ 
+     LV_PROFILER_DRAW_END;
+ }
+ 
+-/**********************
+- *   STATIC FUNCTIONS
+- **********************/
+-
+-#endif /*LV_USE_3DTEXTURE*/
++#endif /*LV_USE_3DTEXTURE || LV_USE_3D*/
+diff --git a/src/draw/opengles/lv_draw_opengles.c b/src/draw/opengles/lv_draw_opengles.c
+index c801e4690..a3efc9390 100644
+--- a/src/draw/opengles/lv_draw_opengles.c
++++ b/src/draw/opengles/lv_draw_opengles.c
+@@ -615,6 +615,7 @@ static void draw_from_cached_texture(lv_draw_task_t * t)
+ 
+ static void execute_drawing(lv_draw_opengles_unit_t * u)
+ {
++    LV_LOG_WARN("[HGZHGZ] OPENGLES execute_drawing() begin"); 
+     lv_draw_task_t * t = u->task_act;
+     t->draw_unit = (lv_draw_unit_t *)u;
+ 
+@@ -758,6 +759,7 @@ static unsigned int create_texture(int32_t w, int32_t h, const void * data)
+ #if LV_USE_3DTEXTURE
+ static void lv_draw_opengles_3d(lv_draw_task_t * t, const lv_draw_3d_dsc_t * dsc, const lv_area_t * coords)
+ {
++    LV_LOG_WARN("[HGZHGZ] OPENGLES lv_draw_opengles_3d() begin"); 
+     LV_PROFILER_DRAW_BEGIN;
+     lv_draw_opengles_unit_t * u = (lv_draw_opengles_unit_t *) t->draw_unit;
+ 
+diff --git a/src/drivers/opengles/lv_opengles_driver.c b/src/drivers/opengles/lv_opengles_driver.c
+index d053bd0a7..eae835759 100644
+--- a/src/drivers/opengles/lv_opengles_driver.c
++++ b/src/drivers/opengles/lv_opengles_driver.c
+@@ -15,6 +15,9 @@
+ 
+ #include "../../display/lv_display_private.h"
+ #include "../../draw/nanovg/lv_draw_nanovg.h"
++#if LV_USE_DRAW_GPU_COMPOSITE
++#include "../../draw/gpu_composite/lv_draw_gpu_composite.h"
++#endif
+ #include "../../misc/lv_area_private.h"
+ #include "opengl_shader/lv_opengl_shader_internal.h"
+ #include "assets/lv_opengles_shader.h"
+@@ -129,6 +132,10 @@ void lv_opengles_init(void)
+     lv_draw_nanovg_init();
+ #endif /*LV_USE_DRAW_NANOVG*/
+ 
++#if LV_USE_DRAW_GPU_COMPOSITE
++    lv_gpu_composite_caps_probe_on_context();
++#endif
++
+     is_init = true;
+ }
+ 
+diff --git a/src/drivers/opengles/lv_opengles_glfw.c b/src/drivers/opengles/lv_opengles_glfw.c
+index 4f6e60f97..add95223f 100644
+--- a/src/drivers/opengles/lv_opengles_glfw.c
++++ b/src/drivers/opengles/lv_opengles_glfw.c
+@@ -13,6 +13,10 @@
+ 
+ #include "lv_opengles_debug.h"
+ #include "lv_opengles_private.h"
++#include "lv_opengles_driver.h"
++#if LV_USE_DRAW_GPU_COMPOSITE
++#include "../../draw/gpu_composite/lv_draw_gpu_composite.h"
++#endif
+ #include "../../misc/lv_area_private.h"
+ 
+ #include <stdlib.h>
+@@ -36,7 +40,7 @@ struct _lv_opengles_window_t {
+     lv_indev_state_t mouse_last_state;
+     uint8_t use_indev : 1;
+     uint8_t closing : 1;
+-#if LV_USE_DRAW_OPENGLES
++#if LV_USE_OPENGLES_DIRECT_DISPLAY
+     uint8_t direct_render_invalidated: 1;
+ #endif
+ };
+@@ -74,8 +78,9 @@ static void indev_read_cb(lv_indev_t * indev, lv_indev_data_t * data);
+ static void framebuffer_size_callback(GLFWwindow * window, int width, int height);
+ static void window_display_delete_cb(lv_event_t * e);
+ static void window_display_flush_cb(lv_display_t * disp, const lv_area_t * area, uint8_t * px_map);
+-#if !LV_USE_DRAW_OPENGLES
+-    static void ensure_init_window_display_texture(void);
++#if !LV_USE_OPENGLES_DIRECT_DISPLAY
++static void ensure_init_window_display_texture(void);
++static void ensure_window_display_texture_sized(int32_t w, int32_t h);
+ #endif
+ 
+ /**********************
+@@ -85,7 +90,7 @@ static bool glfw_inited;
+ static bool glad_inited;
+ static lv_timer_t * update_handler_timer;
+ static lv_ll_t glfw_window_ll;
+-#if !LV_USE_DRAW_OPENGLES
++#if !LV_USE_OPENGLES_DIRECT_DISPLAY
+     static unsigned int window_display_texture;
+ #endif
+ 
+@@ -135,7 +140,7 @@ lv_opengles_window_t * lv_opengles_glfw_window_create_ex(int32_t hor_res, int32_
+ 
+     lv_ll_init(&window->textures, sizeof(lv_opengles_window_texture_t));
+     window->use_indev = use_mouse_indev;
+-#if LV_USE_DRAW_OPENGLES
++#if LV_USE_OPENGLES_DIRECT_DISPLAY
+     window->direct_render_invalidated = 1;
+ #endif
+ 
+@@ -187,7 +192,7 @@ void lv_opengles_window_delete(lv_opengles_window_t * window)
+ 
+     if(lv_ll_is_empty(&glfw_window_ll)) {
+         lv_glfw_window_quit();
+-#if !LV_USE_DRAW_OPENGLES
++#if !LV_USE_OPENGLES_DIRECT_DISPLAY
+         if(window_display_texture) {
+             GL_CALL(glDeleteTextures(1, &window_display_texture));
+             window_display_texture = 0;
+@@ -235,7 +240,7 @@ lv_opengles_window_texture_t * lv_opengles_window_add_texture(lv_opengles_window
+         lv_indev_set_display(indev, texture->disp);
+     }
+ 
+-#if LV_USE_DRAW_OPENGLES
++#if LV_USE_OPENGLES_DIRECT_DISPLAY
+     window->direct_render_invalidated = 1;
+ #endif
+ 
+@@ -252,7 +257,7 @@ void lv_opengles_window_texture_remove(lv_opengles_window_texture_t * texture)
+         lv_indev_delete(texture->indev);
+     }
+ 
+-#if LV_USE_DRAW_OPENGLES
++#if LV_USE_OPENGLES_DIRECT_DISPLAY
+     texture->window->direct_render_invalidated = 1;
+ #endif
+ 
+@@ -279,7 +284,7 @@ lv_display_t * lv_opengles_window_display_create(lv_opengles_window_t * window,
+     lv_area_set(&dsc->area, 0, 0, w - 1, h - 1);
+     dsc->opa = LV_OPA_COVER;
+ 
+-#if LV_USE_DRAW_OPENGLES
++#if LV_USE_OPENGLES_DIRECT_DISPLAY
+     static size_t LV_ATTRIBUTE_MEM_ALIGN dummy_buf;
+     lv_display_set_buffers(disp, &dummy_buf, NULL, h * lv_draw_buf_width_to_stride(w, LV_COLOR_FORMAT_ARGB8888),
+                            LV_DISPLAY_RENDER_MODE_FULL);
+@@ -318,7 +323,7 @@ lv_display_t * lv_opengles_window_display_create(lv_opengles_window_t * window,
+     lv_display_set_flush_cb(disp, window_display_flush_cb);
+     lv_display_add_event_cb(disp, window_display_delete_cb, LV_EVENT_DELETE, disp);
+ 
+-#if LV_USE_DRAW_OPENGLES
++#if LV_USE_OPENGLES_DIRECT_DISPLAY
+     window->direct_render_invalidated = 1;
+ #endif
+ 
+@@ -334,7 +339,7 @@ void lv_opengles_window_texture_set_x(lv_opengles_window_texture_t * texture, in
+ {
+     lv_area_set_pos(&texture->area, x, texture->area.y1);
+ 
+-#if LV_USE_DRAW_OPENGLES
++#if LV_USE_OPENGLES_DIRECT_DISPLAY
+     texture->window->direct_render_invalidated = 1;
+ #endif
+ }
+@@ -343,7 +348,7 @@ void lv_opengles_window_texture_set_y(lv_opengles_window_texture_t * texture, in
+ {
+     lv_area_set_pos(&texture->area, texture->area.x1, y);
+ 
+-#if LV_USE_DRAW_OPENGLES
++#if LV_USE_OPENGLES_DIRECT_DISPLAY
+     texture->window->direct_render_invalidated = 1;
+ #endif
+ }
+@@ -352,7 +357,7 @@ void lv_opengles_window_texture_set_opa(lv_opengles_window_texture_t * texture,
+ {
+     texture->opa = opa;
+ 
+-#if LV_USE_DRAW_OPENGLES
++#if LV_USE_OPENGLES_DIRECT_DISPLAY
+     texture->window->direct_render_invalidated = 1;
+ #endif
+ }
+@@ -469,7 +474,7 @@ static void window_update_handler(lv_timer_t * t)
+         glfwMakeContextCurrent(window->window);
+         lv_opengles_viewport(0, 0, window->hor_res, window->ver_res);
+ 
+-#if LV_USE_DRAW_OPENGLES
++#if LV_USE_OPENGLES_DIRECT_DISPLAY
+         lv_opengles_window_texture_t * textures_head;
+         bool window_display_direct_render =
+             !window->direct_render_invalidated
+@@ -494,7 +499,7 @@ static void window_update_handler(lv_timer_t * t)
+         lv_opengles_window_texture_t * texture;
+         LV_LL_READ(&window->textures, texture) {
+             if(texture->texture_id == 0) { /* it's a window display */
+-#if LV_USE_DRAW_OPENGLES
++#if LV_USE_OPENGLES_DIRECT_DISPLAY
+                 lv_display_set_render_mode(texture->disp,
+                                            window_display_direct_render ? LV_DISPLAY_RENDER_MODE_DIRECT : LV_DISPLAY_RENDER_MODE_FULL);
+ #endif
+@@ -504,7 +509,18 @@ static void window_update_handler(lv_timer_t * t)
+                 lv_display_refr_timer(NULL);
+                 lv_display_set_default(default_save);
+ 
+-#if !LV_USE_DRAW_OPENGLES
++#if LV_USE_DRAW_GPU_COMPOSITE
++                {
++                    int32_t tw = lv_area_get_width(&texture->area);
++                    int32_t th = lv_area_get_height(&texture->area);
++                    ensure_window_display_texture_sized(tw, th);
++                    lv_gpu_composite_flush_3d_to_tex(texture->disp, window_display_texture, tw, th);
++                    lv_gpu_composite_notify_frame_ready(texture->disp);
++                    lv_gpu_composite_overlay_2d_to_tex(texture->disp, window_display_texture, tw, th);
++                }
++                lv_opengles_render_texture_rbswap(window_display_texture, &texture->area, texture->opa, window->hor_res,
++                                                  window->ver_res, &texture->area, window->h_flip, window->v_flip);
++#elif !LV_USE_OPENGLES_DIRECT_DISPLAY
+                 ensure_init_window_display_texture();
+ 
+                 GL_CALL(glBindTexture(GL_TEXTURE_2D, window_display_texture));
+@@ -540,7 +556,7 @@ static void window_update_handler(lv_timer_t * t)
+             else {
+                 /* if the added texture is an LVGL opengles texture display, refresh it before rendering it */
+                 if(texture->disp != NULL) {
+-#if LV_USE_DRAW_OPENGLES
++#if LV_USE_OPENGLES_DIRECT_DISPLAY
+                     lv_display_t * default_save = lv_display_get_default();
+                     lv_display_set_default(texture->disp);
+                     lv_display_refr_timer(NULL);
+@@ -550,12 +566,29 @@ static void window_update_handler(lv_timer_t * t)
+ #endif
+                 }
+ 
+-#if LV_USE_DRAW_OPENGLES
++#if LV_USE_DRAW_GPU_COMPOSITE
++                if(texture->disp != NULL) {
++                    int32_t tw = lv_area_get_width(&texture->area);
++                    int32_t th = lv_area_get_height(&texture->area);
++                    lv_gpu_composite_flush_3d(texture->disp);
++                    lv_gpu_composite_notify_frame_ready(texture->disp);
++                }
++#endif
++
++#if LV_USE_OPENGLES_DIRECT_DISPLAY
+                 lv_opengles_render_texture_rbswap(texture->texture_id, &texture->area, texture->opa, window->hor_res, window->ver_res,
+                                                   &texture->area, window->h_flip, texture->disp == NULL ? window->v_flip : !window->v_flip);
+ #else
++                lv_opengles_reinit_state();
+                 lv_opengles_render_texture_rbswap(texture->texture_id, &texture->area, texture->opa, window->hor_res, window->ver_res,
+                                                   &texture->area, window->h_flip, window->v_flip);
++#if LV_USE_DRAW_GPU_COMPOSITE
++                if(texture->disp != NULL) {
++                    int32_t tw = lv_area_get_width(&texture->area);
++                    int32_t th = lv_area_get_height(&texture->area);
++                    lv_gpu_composite_overlay_2d_screen(texture->disp, tw, th);
++                }
++#endif
+ #endif
+             }
+         }
+@@ -670,7 +703,7 @@ static void window_display_flush_cb(lv_display_t * disp, const lv_area_t * area,
+     lv_display_flush_ready(disp);
+ }
+ 
+-#if !LV_USE_DRAW_OPENGLES
++#if !LV_USE_OPENGLES_DIRECT_DISPLAY
+ static void ensure_init_window_display_texture(void)
+ {
+     if(window_display_texture) {
+@@ -691,6 +724,21 @@ static void ensure_init_window_display_texture(void)
+ 
+     GL_CALL(glBindTexture(GL_TEXTURE_2D, 0));
+ }
++
++static void ensure_window_display_texture_sized(int32_t w, int32_t h)
++{
++    static int32_t alloc_w;
++    static int32_t alloc_h;
++
++    ensure_init_window_display_texture();
++    if(window_display_texture && alloc_w == w && alloc_h == h) return;
++
++    GL_CALL(glBindTexture(GL_TEXTURE_2D, window_display_texture));
++    GL_CALL(glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL));
++    GL_CALL(glBindTexture(GL_TEXTURE_2D, 0));
++    alloc_w = w;
++    alloc_h = h;
++}
+ #endif
+ 
+ #endif /*LV_USE_GLFW*/
+diff --git a/src/drivers/opengles/lv_opengles_private.h b/src/drivers/opengles/lv_opengles_private.h
+index 883fd563a..29e989f8f 100644
+--- a/src/drivers/opengles/lv_opengles_private.h
++++ b/src/drivers/opengles/lv_opengles_private.h
+@@ -18,6 +18,14 @@ extern "C" {
+ 
+ #if LV_USE_OPENGLES
+ 
++#if LV_USE_DRAW_OPENGLES
++#define LV_USE_OPENGLES_DIRECT_DISPLAY 1
++#elif LV_USE_DRAW_GPU_COMPOSITE
++#define LV_USE_OPENGLES_DIRECT_DISPLAY 0
++#else
++#define LV_USE_OPENGLES_DIRECT_DISPLAY 0
++#endif
++
+ #if !LV_USE_MATRIX
+ #error "LV_USE_OPENGLES requires LV_USE_MATRIX"
+ #endif
+diff --git a/src/drivers/opengles/lv_opengles_texture.c b/src/drivers/opengles/lv_opengles_texture.c
+index dd7b65fae..ff95a2eb4 100644
+--- a/src/drivers/opengles/lv_opengles_texture.c
++++ b/src/drivers/opengles/lv_opengles_texture.c
+@@ -17,6 +17,10 @@
+ #include "lv_opengles_texture_private.h"
+ #include "../../display/lv_display_private.h"
+ 
++#if LV_USE_DRAW_GPU_COMPOSITE
++#include "../../draw/gpu_composite/lv_draw_gpu_composite.h"
++#endif
++
+ #include <stdlib.h>
+ 
+ /*********************
+@@ -92,7 +96,8 @@ lv_result_t lv_opengles_texture_reshape(lv_opengles_texture_t * texture, lv_disp
+         return LV_RESULT_INVALID;
+     }
+ 
+-#if LV_USE_DRAW_OPENGLES
++#if LV_USE_OPENGLES_DIRECT_DISPLAY
++    LV_UNUSED(texture);
+     static size_t LV_ATTRIBUTE_MEM_ALIGN dummy_buf;
+     lv_display_set_buffers(display, &dummy_buf, NULL, width * height * 4, LV_DISPLAY_RENDER_MODE_DIRECT);
+ #else
+@@ -132,7 +137,7 @@ static lv_result_t lv_opengles_texture_create_draw_buffers(lv_opengles_texture_t
+     int32_t w = lv_display_get_horizontal_resolution(display);
+     int32_t h = lv_display_get_vertical_resolution(display);
+ 
+-#if LV_USE_DRAW_OPENGLES
++#if LV_USE_OPENGLES_DIRECT_DISPLAY
+     LV_UNUSED(texture);
+     static size_t LV_ATTRIBUTE_MEM_ALIGN dummy_buf;
+     lv_display_set_buffers(display, &dummy_buf, NULL, w * h * 4, LV_DISPLAY_RENDER_MODE_DIRECT);
+@@ -144,6 +149,7 @@ static lv_result_t lv_opengles_texture_create_draw_buffers(lv_opengles_texture_t
+     if(!texture->fb1) {
+         return LV_RESULT_INVALID;
+     }
++    lv_memzero(texture->fb1, buf_size);
+     lv_display_set_buffers(display, texture->fb1, NULL, buf_size, LV_DISPLAY_RENDER_MODE_DIRECT);
+ #endif
+     return LV_RESULT_OK;
+@@ -151,7 +157,7 @@ static lv_result_t lv_opengles_texture_create_draw_buffers(lv_opengles_texture_t
+ 
+ void lv_opengles_texture_deinit(lv_opengles_texture_t * texture)
+ {
+-#if !LV_USE_DRAW_OPENGLES
++#if !LV_USE_OPENGLES_DIRECT_DISPLAY
+     lv_free(texture->fb1);
+ #endif /*!LV_USE_DRAW_OPENGLES*/
+ 
+@@ -191,6 +197,10 @@ static lv_display_t * lv_opengles_texture_create_common(int32_t w, int32_t h)
+         LV_LOG_ERROR("Failed to create display");
+         return NULL;
+     }
++#if LV_USE_DRAW_GPU_COMPOSITE
++    /* Real alpha in CPU fb so 2D overlay does not wipe 3D with XRGB padding byte 0xFF. */
++    lv_display_set_color_format(disp, LV_COLOR_FORMAT_ARGB8888);
++#endif
+     lv_opengles_texture_t * texture = lv_malloc_zeroed(sizeof(lv_opengles_texture_t));
+     LV_ASSERT_MALLOC(texture);
+     if(!texture) {
+@@ -258,10 +268,20 @@ static void flush_cb(lv_display_t * disp, const lv_area_t * area, uint8_t * px_m
+     LV_UNUSED(area);
+     LV_UNUSED(px_map);
+ 
+-#if !LV_USE_DRAW_OPENGLES
++#if !LV_USE_OPENGLES_DIRECT_DISPLAY
+     if(lv_display_flush_is_last(disp)) {
+ 
+         lv_opengles_texture_t * texture = lv_display_get_driver_data(disp);
++
++#if LV_USE_DRAW_GPU_COMPOSITE
++#if LV_USE_GLFW
++        /* Composite runs once after lv_refr_now in lv_opengles_glfw.c */
++#else
++        lv_gpu_composite_flush_3d(disp);
++        lv_gpu_composite_notify_frame_ready(disp);
++        lv_gpu_composite_overlay_2d_fb(disp);
++#endif
++#else
+         lv_color_format_t cf = lv_display_get_color_format(disp);
+         uint32_t stride = lv_draw_buf_width_to_stride(lv_display_get_horizontal_resolution(disp), cf);
+ 
+@@ -269,7 +289,6 @@ static void flush_cb(lv_display_t * disp, const lv_area_t * area, uint8_t * px_m
+ 
+         GL_CALL(glPixelStorei(GL_UNPACK_ALIGNMENT, 1));
+         GL_CALL(glPixelStorei(GL_UNPACK_ROW_LENGTH, stride / lv_color_format_get_size(cf)));
+-        /*Color depth: 16 (RGB565), 32 (XRGB8888)*/
+ #if LV_COLOR_DEPTH == 16
+         GL_CALL(glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB565, disp->hor_res, disp->ver_res, 0, GL_RGB, GL_UNSIGNED_SHORT_5_6_5,
+                              texture->fb1));
+@@ -278,9 +297,10 @@ static void flush_cb(lv_display_t * disp, const lv_area_t * area, uint8_t * px_m
+                              texture->fb1));
+ #else
+ #error("Unsupported color format")
++#endif
+ #endif
+     }
+-#endif /* !LV_USE_DRAW_OPENGLES */
++#endif /* !LV_USE_OPENGLES_DIRECT_DISPLAY */
+ 
+     lv_display_flush_ready(disp);
+ }
+diff --git a/src/drivers/wayland/lv_wayland_backend_egl.c b/src/drivers/wayland/lv_wayland_backend_egl.c
+index edb80d19e..e6beef28a 100644
+--- a/src/drivers/wayland/lv_wayland_backend_egl.c
++++ b/src/drivers/wayland/lv_wayland_backend_egl.c
+@@ -14,6 +14,9 @@
+ #include "../opengles/lv_opengles_texture_private.h"
+ #include "../opengles/lv_opengles_egl_private.h"
+ #include "../opengles/lv_opengles_debug.h"
++#if LV_USE_DRAW_GPU_COMPOSITE
++#include "../../draw/gpu_composite/lv_draw_gpu_composite.h"
++#endif
+ 
+ #include <wayland-egl.h>
+ 
+@@ -171,7 +174,7 @@ static void flush_wait_cb(lv_display_t * disp)
+     }
+ }
+ 
+-#if LV_USE_DRAW_OPENGLES || LV_USE_DRAW_NANOVG
++#if LV_USE_DRAW_OPENGLES || LV_USE_DRAW_NANOVG || LV_USE_DRAW_GPU_COMPOSITE
+ 
+ static void egl_flush_cb(lv_display_t * disp, const lv_area_t * area, uint8_t * px_map)
+ {
+@@ -197,7 +200,15 @@ static void egl_flush_cb(lv_display_t * disp, const lv_area_t * area, uint8_t *
+     lv_opengles_viewport(0, 0, lv_display_get_original_horizontal_resolution(disp),
+                          lv_display_get_original_vertical_resolution(disp));
+     lv_opengles_render_display_texture(disp, false, true);
+-#endif /*LV_USE_DRAW_OPENGLES*/
++#elif LV_USE_DRAW_GPU_COMPOSITE
++    lv_opengles_viewport(0, 0, lv_display_get_original_horizontal_resolution(disp),
++                         lv_display_get_original_vertical_resolution(disp));
++    lv_gpu_composite_flush_3d(disp);
++    lv_gpu_composite_notify_frame_ready(disp);
++    lv_gpu_composite_overlay_2d_fb(disp);
++    lv_opengles_render_params_t params = { .h_flip = false, .v_flip = false, .rb_swap = true };
++    lv_opengles_render_display(disp, &params);
++#endif
+ 
+     /* Swap buffers through EGL */
+     lv_opengles_egl_update(ddata->egl_ctx);
+diff --git a/src/lv_init.c b/src/lv_init.c
+index 90d5c6717..3b9a0eb7a 100644
+--- a/src/lv_init.c
++++ b/src/lv_init.c
+@@ -57,6 +57,9 @@
+ #if LV_USE_DRAW_OPENGLES
+     #include "draw/opengles/lv_draw_opengles.h"
+ #endif
++#if LV_USE_DRAW_GPU_COMPOSITE
++    #include "draw/gpu_composite/lv_draw_gpu_composite.h"
++#endif
+ #if LV_USE_PPA
+     #include "draw/espressif/ppa/lv_draw_ppa.h"
+ #endif
+@@ -247,6 +250,9 @@ void lv_init(void)
+ #if LV_USE_DRAW_OPENGLES
+     lv_draw_opengles_init();
+ #endif
++#if LV_USE_DRAW_GPU_COMPOSITE
++    lv_draw_gpu_composite_init();
++#endif
+ 
+ #if LV_USE_PPA
+     lv_draw_ppa_init();
+@@ -479,6 +485,9 @@ void lv_deinit(void)
+ #if LV_USE_DRAW_OPENGLES
+     lv_draw_opengles_deinit();
+ #endif
++#if LV_USE_DRAW_GPU_COMPOSITE
++    lv_draw_gpu_composite_deinit();
++#endif
+ 
+ #if LV_USE_DRAW_SW
+     lv_draw_sw_deinit();
+diff --git a/src/widgets/3d/lv_3dcamera.c b/src/widgets/3d/lv_3dcamera.c
+new file mode 100644
+index 000000000..4e87c1af9
+--- /dev/null
++++ b/src/widgets/3d/lv_3dcamera.c
+@@ -0,0 +1,59 @@
++/**
++ * @file lv_3dcamera.c
++ */
++
++#include "lv_3dcamera_private.h"
++
++#if LV_USE_3D && LV_USE_3D_WIDGETS
++
++#include "../../core/lv_obj_class_private.h"
++
++#define MY_CLASS (&lv_3dcamera_class)
++
++static void lv_3dcamera_constructor(const lv_obj_class_t * class_p, lv_obj_t * obj);
++
++const lv_obj_class_t lv_3dcamera_class = {
++    .constructor_cb = lv_3dcamera_constructor,
++    .instance_size = sizeof(lv_3dcamera_t),
++    .base_class = &lv_obj_class,
++    .name = "3dcamera",
++};
++
++lv_obj_t * lv_3dcamera_create(lv_obj_t * parent)
++{
++    lv_obj_t * obj = lv_obj_class_create_obj(MY_CLASS, parent);
++    lv_obj_class_init_obj(obj);
++    return obj;
++}
++
++void lv_3dcamera_set_perspective(lv_obj_t * obj, float fov_deg, float near_z, float far_z)
++{
++    LV_ASSERT_OBJ(obj, MY_CLASS);
++    lv_3dcamera_t * cam = (lv_3dcamera_t *)obj;
++    cam->fov_deg = fov_deg;
++    cam->near_z = near_z;
++    cam->far_z = far_z;
++}
++
++void lv_3dcamera_look_at(lv_obj_t * obj, lv_vec3_t eye, lv_vec3_t target, lv_vec3_t up)
++{
++    LV_ASSERT_OBJ(obj, MY_CLASS);
++    lv_3dcamera_t * cam = (lv_3dcamera_t *)obj;
++    cam->eye = eye;
++    cam->target = target;
++    cam->up = up;
++}
++
++static void lv_3dcamera_constructor(const lv_obj_class_t * class_p, lv_obj_t * obj)
++{
++    LV_UNUSED(class_p);
++    lv_3dcamera_t * cam = (lv_3dcamera_t *)obj;
++    cam->eye = (lv_vec3_t) { 0, 200, 800 };
++    cam->target = (lv_vec3_t) { 0, 0, 0 };
++    cam->up = (lv_vec3_t) { 0, 1, 0 };
++    cam->fov_deg = 45.0f;
++    cam->near_z = 10.0f;
++    cam->far_z = 5000.0f;
++}
++
++#endif /*LV_USE_3D && LV_USE_3D_WIDGETS*/
+diff --git a/src/widgets/3d/lv_3dcamera_private.h b/src/widgets/3d/lv_3dcamera_private.h
+new file mode 100644
+index 000000000..548195c6c
+--- /dev/null
++++ b/src/widgets/3d/lv_3dcamera_private.h
+@@ -0,0 +1,27 @@
++/**
++ * @file lv_3dcamera_private.h
++ */
++
++#ifndef LV_3DCAMERA_PRIVATE_H
++#define LV_3DCAMERA_PRIVATE_H
++
++#include "../../lvgl_public.h"
++#include "../../core/lv_obj_private.h"
++
++#if LV_USE_3D && LV_USE_3D_WIDGETS
++
++typedef struct {
++    lv_obj_t obj;
++    lv_vec3_t eye;
++    lv_vec3_t target;
++    lv_vec3_t up;
++    float fov_deg;
++    float near_z;
++    float far_z;
++} lv_3dcamera_t;
++
++extern const lv_obj_class_t lv_3dcamera_class;
++
++#endif
++
++#endif /*LV_3DCAMERA_PRIVATE_H*/
+diff --git a/src/widgets/3d/lv_3dmesh.c b/src/widgets/3d/lv_3dmesh.c
+new file mode 100644
+index 000000000..90a70de97
+--- /dev/null
++++ b/src/widgets/3d/lv_3dmesh.c
+@@ -0,0 +1,125 @@
++/**
++ * @file lv_3dmesh.c
++ */
++
++#include "lv_3dmesh_private.h"
++
++#if LV_USE_3D && LV_USE_3D_WIDGETS
++
++#include "../../core/lv_obj_class_private.h"
++#include "../../3d/lv_3d_internal.h"
++
++#define MY_CLASS (&lv_3dmesh_class)
++
++static void lv_3dmesh_constructor(const lv_obj_class_t * class_p, lv_obj_t * obj);
++static void lv_3dmesh_destructor(const lv_obj_class_t * class_p, lv_obj_t * obj);
++
++const lv_obj_class_t lv_3dmesh_class = {
++    .constructor_cb = lv_3dmesh_constructor,
++    .destructor_cb = lv_3dmesh_destructor,
++    .width_def = LV_DPI_DEF / 2,
++    .height_def = LV_DPI_DEF / 2,
++    .instance_size = sizeof(lv_3dmesh_t),
++    .base_class = &lv_obj_class,
++    .name = "3dmesh",
++};
++
++static void sync_transform(lv_3dmesh_t * mesh)
++{
++    lv_3d_draw_item_t * item = lv_3d_mesh_get_draw_item_mut(mesh->mesh_id);
++    if(!item) return;
++    lv_3d_transform_set_local_trs(&item->transform,
++                                  mesh->pos[0], mesh->pos[1], mesh->pos[2],
++                                  mesh->rot[0], mesh->rot[1], mesh->rot[2],
++                                  mesh->scale[0], mesh->scale[1], mesh->scale[2]);
++}
++
++lv_obj_t * lv_3dmesh_create(lv_obj_t * parent)
++{
++    lv_obj_t * obj = lv_obj_class_create_obj(MY_CLASS, parent);
++    lv_obj_class_init_obj(obj);
++    return obj;
++}
++
++void lv_3dmesh_set_box(lv_obj_t * obj, float w, float h, float d)
++{
++    LV_ASSERT_OBJ(obj, MY_CLASS);
++    lv_3dmesh_t * mesh = (lv_3dmesh_t *)obj;
++    mesh->mesh_id = lv_3d_mesh_alloc_box(w, h, d, false);
++    sync_transform(mesh);
++    lv_obj_invalidate(obj);
++}
++
++void lv_3dmesh_set_wireframe(lv_obj_t * obj, bool en)
++{
++    LV_ASSERT_OBJ(obj, MY_CLASS);
++    lv_3dmesh_t * mesh = (lv_3dmesh_t *)obj;
++    if(mesh->mesh_id) {
++        lv_3d_draw_item_t * item = lv_3d_mesh_get_draw_item_mut(mesh->mesh_id);
++        if(item) item->wireframe = en;
++    }
++    lv_3d_material_init(&mesh->material, en ? LV_3D_MAT_WIREFRAME : LV_3D_MAT_OPAQUE, mesh->material.color,
++                        mesh->material.opa);
++    lv_obj_invalidate(obj);
++}
++
++void lv_3dmesh_set_color(lv_obj_t * obj, lv_color_t c)
++{
++    LV_ASSERT_OBJ(obj, MY_CLASS);
++    lv_3dmesh_t * mesh = (lv_3dmesh_t *)obj;
++    mesh->material.color = c;
++    lv_obj_invalidate(obj);
++}
++
++void lv_3dmesh_set_material(lv_obj_t * obj, const lv_3d_material_t * mat)
++{
++    LV_ASSERT_OBJ(obj, MY_CLASS);
++    lv_3dmesh_t * mesh = (lv_3dmesh_t *)obj;
++    mesh->material = *mat;
++    lv_obj_invalidate(obj);
++}
++
++void lv_3dmesh_set_position(lv_obj_t * obj, float x, float y, float z)
++{
++    LV_ASSERT_OBJ(obj, MY_CLASS);
++    lv_3dmesh_t * mesh = (lv_3dmesh_t *)obj;
++    mesh->pos[0] = x; mesh->pos[1] = y; mesh->pos[2] = z;
++    sync_transform(mesh);
++    lv_obj_invalidate(obj);
++}
++
++void lv_3dmesh_set_rotation_y(lv_obj_t * obj, float yaw_deg)
++{
++    LV_ASSERT_OBJ(obj, MY_CLASS);
++    lv_3dmesh_t * mesh = (lv_3dmesh_t *)obj;
++    mesh->rot[1] = yaw_deg * (float)(3.14159265 / 180.0);
++    sync_transform(mesh);
++    lv_obj_invalidate(obj);
++}
++
++void lv_3dmesh_set_scale(lv_obj_t * obj, float sx, float sy, float sz)
++{
++    LV_ASSERT_OBJ(obj, MY_CLASS);
++    lv_3dmesh_t * mesh = (lv_3dmesh_t *)obj;
++    mesh->scale[0] = sx; mesh->scale[1] = sy; mesh->scale[2] = sz;
++    sync_transform(mesh);
++    lv_obj_invalidate(obj);
++}
++
++static void lv_3dmesh_constructor(const lv_obj_class_t * class_p, lv_obj_t * obj)
++{
++    LV_UNUSED(class_p);
++    lv_3dmesh_t * mesh = (lv_3dmesh_t *)obj;
++    mesh->mesh_id = lv_3d_mesh_alloc_box(100, 100, 100, true);
++    mesh->scale[0] = mesh->scale[1] = mesh->scale[2] = 1.0f;
++    lv_3d_material_init(&mesh->material, LV_3D_MAT_WIREFRAME, lv_color_hex(0x00FFAA), LV_OPA_COVER);
++    sync_transform(mesh);
++}
++
++static void lv_3dmesh_destructor(const lv_obj_class_t * class_p, lv_obj_t * obj)
++{
++    LV_UNUSED(class_p);
++    LV_UNUSED(obj);
++}
++
++#endif /*LV_USE_3D && LV_USE_3D_WIDGETS*/
+diff --git a/src/widgets/3d/lv_3dmesh_private.h b/src/widgets/3d/lv_3dmesh_private.h
+new file mode 100644
+index 000000000..024e613b3
+--- /dev/null
++++ b/src/widgets/3d/lv_3dmesh_private.h
+@@ -0,0 +1,28 @@
++/**
++ * @file lv_3dmesh_private.h
++ */
++
++#ifndef LV_3DMESH_PRIVATE_H
++#define LV_3DMESH_PRIVATE_H
++
++#include "../../lvgl_public.h"
++#include "../../core/lv_obj_private.h"
++
++#if LV_USE_3D && LV_USE_3D_WIDGETS
++
++#include "../../3d/lv_3d_internal.h"
++
++typedef struct {
++    lv_obj_t obj;
++    lv_3d_mesh_id_t mesh_id;
++    lv_3d_material_t material;
++    float pos[3];
++    float rot[3];
++    float scale[3];
++} lv_3dmesh_t;
++
++extern const lv_obj_class_t lv_3dmesh_class;
++
++#endif
++
++#endif /*LV_3DMESH_PRIVATE_H*/
+diff --git a/src/widgets/3d/lv_3dscene.c b/src/widgets/3d/lv_3dscene.c
+new file mode 100644
+index 000000000..da31bdf97
+--- /dev/null
++++ b/src/widgets/3d/lv_3dscene.c
+@@ -0,0 +1,25 @@
++/**
++ * @file lv_3dscene.c
++ */
++
++#include "../../include/lvgl/widgets/lv_3dscene.h"
++
++#if LV_USE_3D && LV_USE_3D_WIDGETS
++
++#include "../../core/lv_obj_class_private.h"
++
++const lv_obj_class_t lv_3dscene_class = {
++    .width_def = LV_PCT(100),
++    .height_def = LV_PCT(100),
++    .base_class = &lv_obj_class,
++    .name = "3dscene",
++};
++
++lv_obj_t * lv_3dscene_create(lv_obj_t * parent)
++{
++    lv_obj_t * obj = lv_obj_class_create_obj(&lv_3dscene_class, parent);
++    lv_obj_class_init_obj(obj);
++    return obj;
++}
++
++#endif /*LV_USE_3D && LV_USE_3D_WIDGETS*/
+diff --git a/src/widgets/3d/lv_3dstack.c b/src/widgets/3d/lv_3dstack.c
+new file mode 100644
+index 000000000..1ac30b61f
+--- /dev/null
++++ b/src/widgets/3d/lv_3dstack.c
+@@ -0,0 +1,84 @@
++/**
++ * @file lv_3dstack.c
++ */
++
++#include "../../include/lvgl/widgets/lv_3dstack.h"
++
++#if LV_USE_3D && LV_USE_3DSTACK
++
++#include "../../core/lv_obj_class_private.h"
++#include "lv_3dmesh_private.h"
++
++typedef struct {
++    lv_obj_t obj;
++    uint8_t cols;
++    uint8_t rows;
++    float row_z[8];
++    float x_gap;
++    float y_gap;
++} lv_3dstack_t;
++
++static const lv_obj_class_t lv_3dstack_class = {
++    .width_def = LV_PCT(100),
++    .height_def = LV_PCT(100),
++    .instance_size = sizeof(lv_3dstack_t),
++    .base_class = &lv_obj_class,
++    .name = "3dstack",
++};
++
++lv_obj_t * lv_3dstack_create(lv_obj_t * parent)
++{
++    lv_obj_t * obj = lv_obj_class_create_obj(&lv_3dstack_class, parent);
++    lv_obj_class_init_obj(obj);
++    lv_3dstack_t * stack = (lv_3dstack_t *)obj;
++    stack->cols = 3;
++    stack->rows = 3;
++    stack->row_z[0] = -400;
++    stack->row_z[1] = -700;
++    stack->row_z[2] = -1000;
++    stack->x_gap = 220;
++    stack->y_gap = 160;
++    return obj;
++}
++
++void lv_3dstack_set_grid(lv_obj_t * obj, uint8_t cols, uint8_t rows)
++{
++    lv_3dstack_t * stack = (lv_3dstack_t *)obj;
++    stack->cols = cols;
++    stack->rows = rows;
++}
++
++void lv_3dstack_set_row_depth(lv_obj_t * obj, uint8_t row, float z)
++{
++    lv_3dstack_t * stack = (lv_3dstack_t *)obj;
++    if(row < 8) stack->row_z[row] = z;
++}
++
++void lv_3dstack_set_cell_spacing(lv_obj_t * obj, float x_gap, float y_gap)
++{
++    lv_3dstack_t * stack = (lv_3dstack_t *)obj;
++    stack->x_gap = x_gap;
++    stack->y_gap = y_gap;
++}
++
++void lv_3dstack_layout(lv_obj_t * obj)
++{
++    lv_3dstack_t * stack = (lv_3dstack_t *)obj;
++    uint32_t n = lv_obj_get_child_count(obj);
++    uint32_t idx = 0;
++    for(uint32_t r = 0; r < stack->rows && idx < n; r++) {
++        for(uint32_t c = 0; c < stack->cols && idx < n; c++) {
++            lv_obj_t * tile = lv_obj_get_child(obj, idx);
++            if(lv_obj_check_type(tile, &lv_3dmesh_class)) {
++                float cx = (float)c - (stack->cols - 1) * 0.5f;
++                float cy = (float)r - (stack->rows - 1) * 0.5f;
++                lv_3dmesh_set_position(tile, cx * stack->x_gap, cy * stack->y_gap, stack->row_z[r]);
++                float sc = 1.0f - r * 0.08f;
++                lv_3dmesh_set_scale(tile, sc, sc, sc);
++            }
++            idx++;
++        }
++    }
++}
++
++#endif /*LV_USE_3D && LV_USE_3DSTACK*/
+diff --git a/src/widgets/3d/lv_3dviewport.c b/src/widgets/3d/lv_3dviewport.c
+new file mode 100644
+index 000000000..0f60de6dd
+--- /dev/null
++++ b/src/widgets/3d/lv_3dviewport.c
+@@ -0,0 +1,76 @@
++/**
++ * @file lv_3dviewport.c
++ */
++
++#include "lv_3dviewport_private.h"
++
++#if LV_USE_3D && LV_USE_3D_WIDGETS
++
++#include "../../core/lv_obj_class_private.h"
++#include "../../include/lvgl/draw/lv_draw_3d.h"
++#include "../../draw/gpu_composite/lv_draw_gpu_composite.h"
++
++#define MY_CLASS (&lv_3dviewport_class)
++
++static void lv_3dviewport_event(const lv_obj_class_t * class_p, lv_event_t * e);
++
++const lv_obj_class_t lv_3dviewport_class = {
++    .event_cb = lv_3dviewport_event,
++    .width_def = LV_PCT(100),
++    .height_def = LV_PCT(100),
++    .instance_size = sizeof(lv_3dviewport_t),
++    .base_class = &lv_obj_class,
++    .name = "3dviewport",
++};
++
++lv_obj_t * lv_3dviewport_create(lv_obj_t * parent)
++{
++    lv_obj_t * obj = lv_obj_class_create_obj(MY_CLASS, parent);
++    lv_obj_class_init_obj(obj);
++    return obj;
++}
++
++void lv_3dviewport_set_camera(lv_obj_t * obj, lv_obj_t * camera)
++{
++    LV_ASSERT_OBJ(obj, MY_CLASS);
++    lv_3dviewport_t * vp = (lv_3dviewport_t *)obj;
++    vp->camera = camera;
++    lv_obj_invalidate(obj);
++}
++
++void lv_3dviewport_set_scene(lv_obj_t * obj, lv_obj_t * scene)
++{
++    LV_ASSERT_OBJ(obj, MY_CLASS);
++    lv_3dviewport_t * vp = (lv_3dviewport_t *)obj;
++    vp->scene = scene;
++    lv_obj_invalidate(obj);
++}
++
++static void lv_3dviewport_event(const lv_obj_class_t * class_p, lv_event_t * e)
++{
++    LV_UNUSED(class_p);
++    lv_event_code_t code = lv_event_get_code(e);
++    lv_obj_t * obj = lv_event_get_current_target(e);
++
++    if(code == LV_EVENT_DRAW_MAIN) {
++        lv_3dviewport_t * vp = (lv_3dviewport_t *)obj;
++        if(!vp->scene || !vp->camera) return;
++
++        lv_layer_t * layer = lv_event_get_layer(e);
++        lv_area_t coords;
++        lv_obj_get_coords(obj, &coords);
++
++        lv_draw_3d_dsc_t dsc;
++        lv_draw_3d_dsc_init(&dsc);
++        dsc.kind = LV_3D_DRAW_KIND_VIEWPORT_PASS;
++        dsc.scene = vp->scene;
++        dsc.camera = vp->camera;
++        dsc.viewport_area = coords;
++        lv_draw_3d(layer, &dsc, &coords);
++    }
++    else {
++        lv_obj_event_base(MY_CLASS, e);
++    }
++}
++
++#endif /*LV_USE_3D && LV_USE_3D_WIDGETS*/
+diff --git a/src/widgets/3d/lv_3dviewport_private.h b/src/widgets/3d/lv_3dviewport_private.h
+new file mode 100644
+index 000000000..ab2ac0c4c
+--- /dev/null
++++ b/src/widgets/3d/lv_3dviewport_private.h
+@@ -0,0 +1,23 @@
++/**
++ * @file lv_3dviewport_private.h
++ */
++
++#ifndef LV_3DVIEWPORT_PRIVATE_H
++#define LV_3DVIEWPORT_PRIVATE_H
++
++#include "../../lvgl_public.h"
++#include "../../core/lv_obj_private.h"
++
++#if LV_USE_3D && LV_USE_3D_WIDGETS
++
++typedef struct {
++    lv_obj_t obj;
++    lv_obj_t * camera;
++    lv_obj_t * scene;
++} lv_3dviewport_t;
++
++extern const lv_obj_class_t lv_3dviewport_class;
++
++#endif
++
++#endif /*LV_3DVIEWPORT_PRIVATE_H*/
+-- 
+2.34.1
+

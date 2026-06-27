@@ -1,0 +1,744 @@
+From a202deec92aebc8f2bb3eb45ab0249e5c2df2798 Mon Sep 17 00:00:00 2001
+From: gz <gz@local>
+Date: Sat, 27 Jun 2026 20:15:27 +0800
+Subject: [PATCH 2/3] Enhance scenario1/2 demos, verify tooling, and bump lvgl
+ submodule.
+
+Add three-row side peek tiles, 3D ray pick, fullscreen hide via mesh opa,
+scenario2 segment-pool parallax, GPU path verify stats, and enable snapshot
+plus segment pool in backend configs.
+---
+ configs/lvgl2d3dbackend-glfw.defaults        |   3 +-
+ configs/lvgl2d3dbackend-wayland-egl.defaults |   1 +
+ lvgl                                         |   2 +-
+ scripts/verify_lvgl_common.sh                |   3 +-
+ scripts/verify_scenario2.sh                  |   4 +-
+ src/demos/lvgl_demos.h                       |   5 +
+ src/demos/lvgl_scenario1.c                   | 187 ++++++++++++++-----
+ src/demos/lvgl_scenario2.c                   | 140 ++++++++++++--
+ src/demos/lvgl_verify.c                      | 101 +++++++++-
+ 9 files changed, 380 insertions(+), 66 deletions(-)
+
+diff --git a/configs/lvgl2d3dbackend-glfw.defaults b/configs/lvgl2d3dbackend-glfw.defaults
+index 6344100..98674d7 100644
+--- a/configs/lvgl2d3dbackend-glfw.defaults
++++ b/configs/lvgl2d3dbackend-glfw.defaults
+@@ -24,7 +24,8 @@ LV_GPU_COMPOSITE_DEPTH_BITS 16
+ LV_GPU_COMPOSITE_USE_ETC1 1
+ LV_GPU_COMPOSITE_LOG_CAPS 1
+ LV_USE_3DSTACK 1
+-LV_USE_3D_SEGMENT_POOL 0
++LV_USE_3D_SEGMENT_POOL 1
++LV_USE_SNAPSHOT 1
+ 
+ LV_COLOR_DEPTH 32
+ 
+diff --git a/configs/lvgl2d3dbackend-wayland-egl.defaults b/configs/lvgl2d3dbackend-wayland-egl.defaults
+index 2299b28..2206e5d 100644
+--- a/configs/lvgl2d3dbackend-wayland-egl.defaults
++++ b/configs/lvgl2d3dbackend-wayland-egl.defaults
+@@ -35,6 +35,7 @@ LV_GPU_COMPOSITE_USE_ETC1 1
+ LV_GPU_COMPOSITE_LOG_CAPS 1
+ LV_USE_3DSTACK 1
+ LV_USE_3D_SEGMENT_POOL 1
++LV_USE_SNAPSHOT 1
+ 
+ # Examples
+ LV_BUILD_EXAMPLES 1
+diff --git a/lvgl b/lvgl
+index d70fbba..7816675 160000
+--- a/lvgl
++++ b/lvgl
+@@ -1 +1 @@
+-Subproject commit d70fbbad9a0a8350cf553b9cfb34ff081725cdd2
++Subproject commit 7816675012d6aae66a764dc04a0e1862795d3cfc
+diff --git a/scripts/verify_lvgl_common.sh b/scripts/verify_lvgl_common.sh
+index b6c771c..b623ff6 100755
+--- a/scripts/verify_lvgl_common.sh
++++ b/scripts/verify_lvgl_common.sh
+@@ -39,12 +39,13 @@ lvgl_verify_run() {
+   export LVGL_VERIFY=1
+   export LVGL_VERIFY_FRAMES="${LVGL_VERIFY_FRAMES:-60}"
+   export LVGL_VERIFY_WARMUP="${LVGL_VERIFY_WARMUP:-8}"
++  export LVGL_VERIFY_GPU_PATH="${LVGL_VERIFY_GPU_PATH:-0}"
+   export LV_SIM_WINDOW_WIDTH="${LV_SIM_WINDOW_WIDTH:-1920}"
+   export LV_SIM_WINDOW_HEIGHT="${LV_SIM_WINDOW_HEIGHT:-1080}"
+ 
+   local w="${LV_SIM_WINDOW_WIDTH}"
+   local h="${LV_SIM_WINDOW_HEIGHT}"
+-  local run_cmd=(timeout 45 "$bin" "${backend_args[@]}" -W "$w" -H "$h")
++  local run_cmd=(timeout 180 stdbuf -oL "$bin" "${backend_args[@]}" -W "$w" -H "$h")
+ 
+   echo "verify: backend=$backend scenario=$scenario ${w}x${h} frames=${LVGL_VERIFY_FRAMES} bin=$bin"
+ 
+diff --git a/scripts/verify_scenario2.sh b/scripts/verify_scenario2.sh
+index 4720f2f..2ab6f95 100755
+--- a/scripts/verify_scenario2.sh
++++ b/scripts/verify_scenario2.sh
+@@ -1,7 +1,9 @@
+ #!/usr/bin/env bash
+-# 场景二验收：静态线框楼群 + AR 透明底 + 中心绿色线框像素
++# 场景二验收：AR 透明底 + 滚动线框楼群 + segment_pool parallax
+ set -euo pipefail
+ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
++export LVGL_SCENARIO2_SCROLL_SPEED="${LVGL_SCENARIO2_SCROLL_SPEED:-220}"
++export LVGL_VERIFY_GPU_PATH="${LVGL_VERIFY_GPU_PATH:-1}"
+ # shellcheck source=scripts/verify_lvgl_common.sh
+ source "$ROOT/scripts/verify_lvgl_common.sh"
+ lvgl_verify_run 2
+diff --git a/src/demos/lvgl_demos.h b/src/demos/lvgl_demos.h
+index e029ad3..09690bf 100644
+--- a/src/demos/lvgl_demos.h
++++ b/src/demos/lvgl_demos.h
+@@ -12,6 +12,11 @@ extern "C" {
+ void lvgl_scenario1_launcher_create(void);
+ void lvgl_scenario2_skyline_create(void);
+ 
++/** Segment pool recycle count (scenario 2 Phase 2 verify). */
++uint32_t lvgl_scenario2_get_recycle_count(void);
++/** Minimum segment base z (scenario 2 parallax verify). */
++float lvgl_scenario2_get_min_seg_z(void);
++
+ /** Run automated verification; returns 0 on pass. */
+ int lvgl_verify_run(int scenario_id);
+ 
+diff --git a/src/demos/lvgl_scenario1.c b/src/demos/lvgl_scenario1.c
+index a15b356..d55e9b2 100644
+--- a/src/demos/lvgl_scenario1.c
++++ b/src/demos/lvgl_scenario1.c
+@@ -13,8 +13,9 @@
+     #define M_PI 3.14159265358979323846
+ #endif
+ 
+-#define LVGL_S1_TILE_COUNT 11
++#define LVGL_S1_TILE_COUNT 15
+ #define LVGL_S1_ANIM_MS      420
++#define LVGL_S1_GRID_TILES   9
+ 
+ typedef struct {
+     lv_obj_t * mesh;
+@@ -41,6 +42,8 @@ static const uint32_t tile_colors[LVGL_S1_TILE_COUNT] = {
+     0xE53935, 0xFB8C00, 0xFDD835, 0x43A047, 0x1E88E5,
+     0x8E24AA, 0x00ACC1, 0x6D4C41, 0x546E7A,
+     0x26A69A, 0xEC407A,
++    0xAB47BC, 0x26C6DA,
++    0x5C6BC0, 0xFF7043,
+ };
+ 
+ static float ease_out_cubic(float t)
+@@ -52,12 +55,10 @@ static float ease_out_cubic(float t)
+ static void tile_apply(lvgl_s1_tile_t * t, float x, float y, float z,
+                        float yaw_deg, float sx, float sy, float sz, lv_opa_t opa)
+ {
+-    lv_3d_material_t mat;
+-    lv_3d_material_init(&mat, LV_3D_MAT_OPAQUE, t->color, opa);
+-    lv_3dmesh_set_material(t->mesh, &mat);
+     lv_3dmesh_set_position(t->mesh, x, y, z);
+     lv_3dmesh_set_rotation_y(t->mesh, yaw_deg);
+     lv_3dmesh_set_scale(t->mesh, sx, sy, sz);
++    lv_3dmesh_set_opa(t->mesh, opa);
+ }
+ 
+ static void tile_apply_home(int idx, lv_opa_t opa)
+@@ -70,6 +71,21 @@ static void tile_apply_home(int idx, lv_opa_t opa)
+                opa);
+ }
+ 
++static void apply_focused_steady_state(int focused_idx)
++{
++    for(int i = 0; i < LVGL_S1_TILE_COUNT; i++) {
++        if(i == focused_idx) {
++            tile_apply(&g_tiles[i], 0.0f, 0.0f, -220.0f, 0.0f, 3.2f, 3.2f, 3.2f, LV_OPA_COVER);
++        }
++        else {
++            lvgl_s1_tile_t * t = &g_tiles[i];
++            tile_apply(t,
++                       t->home_pos[0], t->home_pos[1], t->home_pos[2] - 520.0f,
++                       t->home_rot_y, 0.0f, 0.0f, 0.0f, LV_OPA_TRANSP);
++        }
++    }
++}
++
+ static void anim_timer_cb(lv_timer_t * timer)
+ {
+     LV_UNUSED(timer);
+@@ -84,6 +100,14 @@ static void anim_timer_cb(lv_timer_t * timer)
+             lv_timer_delete(g_anim_timer);
+             g_anim_timer = NULL;
+         }
++        if(s_anim_target >= 0) {
++            apply_focused_steady_state(s_anim_target);
++        }
++        else {
++            for(int i = 0; i < LVGL_S1_TILE_COUNT; i++) tile_apply_home(i, LV_OPA_COVER);
++        }
++        if(g_vp) lv_obj_invalidate(g_vp);
++        return;
+     }
+ 
+     float e = ease_out_cubic(u);
+@@ -104,12 +128,13 @@ static void anim_timer_cb(lv_timer_t * timer)
+             opa = (lv_opa_t)(s_from_opa[i] + ((int32_t)LV_OPA_COVER - s_from_opa[i]) * e);
+         }
+         else if(s_anim_target >= 0) {
++            float shrink = 1.0f - e;
+             x = s_from_pos[i][0];
+             y = s_from_pos[i][1];
+             z = s_from_pos[i][2] + (-520.0f) * e;
+-            sx = s_from_scale[i][0] * (1.0f - 0.55f * e);
+-            sy = s_from_scale[i][1] * (1.0f - 0.55f * e);
+-            sz = s_from_scale[i][2] * (1.0f - 0.55f * e);
++            sx = s_from_scale[i][0] * shrink;
++            sy = s_from_scale[i][1] * shrink;
++            sz = s_from_scale[i][2] * shrink;
+             yaw = s_from_rot_y[i];
+             opa = (lv_opa_t)(s_from_opa[i] * (1.0f - e));
+         }
+@@ -168,21 +193,53 @@ static void start_anim(int target_idx)
+     g_anim_timer = lv_timer_create(anim_timer_cb, 16, NULL);
+ }
+ 
+-static int pick_tile_from_screen(int32_t x, int32_t y, int32_t w, int32_t h)
++static int pick_tile_index(int32_t x, int32_t y)
+ {
+-    if(w < 1 || h < 1) return -1;
+-
+-    if(x < w / 9) return 9;
+-    if(x > w * 8 / 9) return 10;
+-
+-    int col = (x * 3) / w;
+-    int row = (y * 3) / h;
+-    if(col < 0) col = 0;
+-    if(col > 2) col = 2;
+-    if(row < 0) row = 0;
+-    if(row > 2) row = 2;
+-    return row * 3 + col;
++    lv_obj_t * hit = lv_3dviewport_pick_at(g_vp, x, y);
++    if(!hit) return -1;
++
++    for(int i = 0; i < LVGL_S1_TILE_COUNT; i++) {
++        if(g_tiles[i].mesh == hit) return i;
++    }
++    return -1;
++}
++
++#if LV_USE_SNAPSHOT
++static lv_obj_t * create_thumb_source(lv_obj_t * parent, const char * title, uint32_t color_hex, int32_t w, int32_t h)
++{
++    lv_obj_t * cont = lv_obj_create(parent);
++    lv_obj_set_size(cont, w, h);
++    lv_obj_remove_flag(cont, LV_OBJ_FLAG_SCROLLABLE);
++    lv_obj_add_flag(cont, LV_OBJ_FLAG_HIDDEN);
++    lv_obj_set_style_bg_color(cont, lv_color_hex(color_hex), 0);
++    lv_obj_set_style_bg_opa(cont, LV_OPA_COVER, 0);
++    lv_obj_set_style_radius(cont, 10, 0);
++    lv_obj_set_style_border_color(cont, lv_color_hex(0xFFFFFF), 0);
++    lv_obj_set_style_border_width(cont, 2, 0);
++    lv_obj_set_style_border_opa(cont, LV_OPA_60, 0);
++    lv_obj_set_style_pad_all(cont, 6, 0);
++
++    lv_obj_t * lbl = lv_label_create(cont);
++    lv_label_set_text(lbl, title);
++    lv_obj_set_style_text_color(lbl, lv_color_hex(0xFFFFFF), 0);
++    lv_obj_center(lbl);
++    return cont;
++}
++
++static void mesh_apply_plane_thumb(lv_obj_t * mesh, lv_obj_t * thumb_src, float w, float h)
++{
++    lv_3d_snapshot_id_t snap = lv_3d_plane_bake(thumb_src, LV_3D_PLANE_SRC_SNAPSHOT);
++    lv_3dmesh_set_box(mesh, w, h, 4);
++    if(snap != LV_3D_SNAPSHOT_ID_NONE) {
++        lv_3dmesh_set_plane_snapshot(mesh, snap);
++    }
++    else {
++        lv_3d_material_t mat;
++        lv_3d_material_init(&mat, LV_3D_MAT_OPAQUE, lv_color_hex(0x888888), LV_OPA_COVER);
++        lv_3dmesh_set_material(mesh, &mat);
++    }
+ }
++#endif
+ 
+ static void vp_click_cb(lv_event_t * e)
+ {
+@@ -195,9 +252,7 @@ static void vp_click_cb(lv_event_t * e)
+     lv_point_t pt;
+     lv_indev_get_point(indev, &pt);
+ 
+-    int32_t w = lv_obj_get_width(g_vp);
+-    int32_t h = lv_obj_get_height(g_vp);
+-    int idx = pick_tile_from_screen(pt.x, pt.y, w, h);
++    int idx = pick_tile_index(pt.x, pt.y);
+     if(idx < 0) return;
+ 
+     if(g_focused < 0) {
+@@ -213,7 +268,11 @@ static void vp_click_cb(lv_event_t * e)
+     }
+ }
+ 
+-static void setup_peek_tiles(lv_obj_t * scene, float x_gap, float row_z0)
++static void setup_peek_row_pair(lv_obj_t * scene, float x_gap, float row_y, float row_z,
++                                int left_idx, int right_idx,
++                                const char * title_l, const char * title_r,
++                                uint32_t color_l, uint32_t color_r,
++                                lv_obj_t * thumb_root)
+ {
+     const float peek_w = 44.0f;
+     const float peek_h = 112.0f;
+@@ -221,42 +280,56 @@ static void setup_peek_tiles(lv_obj_t * scene, float x_gap, float row_z0)
+     const float yaw_deg = 22.0f;
+ 
+     lv_obj_t * peek_l = lv_3dmesh_create(scene);
++#if LV_USE_SNAPSHOT
++    {
++        lv_obj_t * src = create_thumb_source(thumb_root, title_l, color_l, (int32_t)peek_w, (int32_t)peek_h);
++        mesh_apply_plane_thumb(peek_l, src, peek_w, peek_h);
++    }
++#else
+     lv_3dmesh_set_box(peek_l, peek_w, peek_h, 8);
+     lv_3dmesh_set_wireframe(peek_l, false);
+     {
+         lv_3d_material_t mat;
+-        lv_3d_material_init(&mat, LV_3D_MAT_OPAQUE, lv_color_hex(tile_colors[9]), LV_OPA_COVER);
++        lv_3d_material_init(&mat, LV_3D_MAT_OPAQUE, lv_color_hex(color_l), LV_OPA_COVER);
+         lv_3dmesh_set_material(peek_l, &mat);
+     }
+-    lv_3dmesh_set_position(peek_l, -peek_x, 0.0f, row_z0);
++#endif
++    lv_3dmesh_set_position(peek_l, -peek_x, row_y, row_z);
+     lv_3dmesh_set_rotation_y(peek_l, yaw_deg);
+     lv_3dmesh_set_scale(peek_l, 0.92f, 0.92f, 0.92f);
+-    g_tiles[9].mesh = peek_l;
+-    g_tiles[9].color = lv_color_hex(tile_colors[9]);
+-    g_tiles[9].home_pos[0] = -peek_x;
+-    g_tiles[9].home_pos[1] = 0.0f;
+-    g_tiles[9].home_pos[2] = row_z0;
+-    g_tiles[9].home_rot_y = yaw_deg;
+-    g_tiles[9].home_scale[0] = g_tiles[9].home_scale[1] = g_tiles[9].home_scale[2] = 0.92f;
++    g_tiles[left_idx].mesh = peek_l;
++    g_tiles[left_idx].color = lv_color_hex(color_l);
++    g_tiles[left_idx].home_pos[0] = -peek_x;
++    g_tiles[left_idx].home_pos[1] = row_y;
++    g_tiles[left_idx].home_pos[2] = row_z;
++    g_tiles[left_idx].home_rot_y = yaw_deg;
++    g_tiles[left_idx].home_scale[0] = g_tiles[left_idx].home_scale[1] = g_tiles[left_idx].home_scale[2] = 0.92f;
+ 
+     lv_obj_t * peek_r = lv_3dmesh_create(scene);
++#if LV_USE_SNAPSHOT
++    {
++        lv_obj_t * src = create_thumb_source(thumb_root, title_r, color_r, (int32_t)peek_w, (int32_t)peek_h);
++        mesh_apply_plane_thumb(peek_r, src, peek_w, peek_h);
++    }
++#else
+     lv_3dmesh_set_box(peek_r, peek_w, peek_h, 8);
+     lv_3dmesh_set_wireframe(peek_r, false);
+     {
+         lv_3d_material_t mat;
+-        lv_3d_material_init(&mat, LV_3D_MAT_OPAQUE, lv_color_hex(tile_colors[10]), LV_OPA_COVER);
++        lv_3d_material_init(&mat, LV_3D_MAT_OPAQUE, lv_color_hex(color_r), LV_OPA_COVER);
+         lv_3dmesh_set_material(peek_r, &mat);
+     }
+-    lv_3dmesh_set_position(peek_r, peek_x, 0.0f, row_z0);
++#endif
++    lv_3dmesh_set_position(peek_r, peek_x, row_y, row_z);
+     lv_3dmesh_set_rotation_y(peek_r, -yaw_deg);
+     lv_3dmesh_set_scale(peek_r, 0.92f, 0.92f, 0.92f);
+-    g_tiles[10].mesh = peek_r;
+-    g_tiles[10].color = lv_color_hex(tile_colors[10]);
+-    g_tiles[10].home_pos[0] = peek_x;
+-    g_tiles[10].home_pos[1] = 0.0f;
+-    g_tiles[10].home_pos[2] = row_z0;
+-    g_tiles[10].home_rot_y = -yaw_deg;
+-    g_tiles[10].home_scale[0] = g_tiles[10].home_scale[1] = g_tiles[10].home_scale[2] = 0.92f;
++    g_tiles[right_idx].mesh = peek_r;
++    g_tiles[right_idx].color = lv_color_hex(color_r);
++    g_tiles[right_idx].home_pos[0] = peek_x;
++    g_tiles[right_idx].home_pos[1] = row_y;
++    g_tiles[right_idx].home_pos[2] = row_z;
++    g_tiles[right_idx].home_rot_y = -yaw_deg;
++    g_tiles[right_idx].home_scale[0] = g_tiles[right_idx].home_scale[1] = g_tiles[right_idx].home_scale[2] = 0.92f;
+ }
+ 
+ static void capture_grid_homes(lv_obj_t * stack)
+@@ -265,7 +338,7 @@ static void capture_grid_homes(lv_obj_t * stack)
+     const float y_gap = 160.0f;
+     const float row_z[3] = { -350.0f, -650.0f, -950.0f };
+ 
+-    for(uint32_t i = 0; i < 9; i++) {
++    for(uint32_t i = 0; i < LVGL_S1_GRID_TILES; i++) {
+         lv_obj_t * tile = lv_obj_get_child(stack, i);
+         uint32_t r = i / 3;
+         uint32_t c = i % 3;
+@@ -304,18 +377,42 @@ void lvgl_scenario1_launcher_create(void)
+     lv_3dstack_set_row_depth(stack, 2, -950);
+     lv_3dstack_set_cell_spacing(stack, 220, 160);
+ 
+-    for(int i = 0; i < 9; i++) {
++    lv_obj_t * thumb_root = lv_obj_create(scr);
++    lv_obj_add_flag(thumb_root, LV_OBJ_FLAG_HIDDEN);
++
++    static const char * app_titles[] = {
++        "Maps", "Music", "Photos", "Mail", "Web",
++        "Settings", "Notes", "Weather", "Files",
++    };
++
++    for(int i = 0; i < LVGL_S1_GRID_TILES; i++) {
+         lv_obj_t * tile = lv_3dmesh_create(stack);
++#if LV_USE_SNAPSHOT
++        lv_obj_t * src = create_thumb_source(thumb_root, app_titles[i], tile_colors[i], 160, 100);
++        mesh_apply_plane_thumb(tile, src, 160, 100);
++#else
+         lv_3dmesh_set_box(tile, 160, 100, 8);
+         lv_3dmesh_set_wireframe(tile, false);
+         lv_3d_material_t mat;
+         lv_3d_material_init(&mat, LV_3D_MAT_OPAQUE, lv_color_hex(tile_colors[i]), LV_OPA_COVER);
+         lv_3dmesh_set_material(tile, &mat);
++#endif
+     }
+ 
+     lv_3dstack_layout(stack);
+     capture_grid_homes(stack);
+-    setup_peek_tiles(scene, 220.0f, -350.0f);
++
++    const float x_gap = 220.0f;
++    const float y_gap = 160.0f;
++    const float row_z[3] = { -350.0f, -650.0f, -950.0f };
++
++    /* Rows 1–3: tilted side app previews aligned with each grid row */
++    setup_peek_row_pair(scene, x_gap, -y_gap, row_z[0], 9, 10,
++                        "App L1", "App R1", tile_colors[9], tile_colors[10], thumb_root);
++    setup_peek_row_pair(scene, x_gap, 0.0f, row_z[1], 11, 12,
++                        "App L2", "App R2", tile_colors[11], tile_colors[12], thumb_root);
++    setup_peek_row_pair(scene, x_gap, y_gap, row_z[2], 13, 14,
++                        "App L3", "App R3", tile_colors[13], tile_colors[14], thumb_root);
+ 
+     g_vp = lv_3dviewport_create(scr);
+     lv_obj_set_size(g_vp, LV_PCT(100), LV_PCT(100));
+diff --git a/src/demos/lvgl_scenario2.c b/src/demos/lvgl_scenario2.c
+index 47506d7..e42ec03 100644
+--- a/src/demos/lvgl_scenario2.c
++++ b/src/demos/lvgl_scenario2.c
+@@ -1,11 +1,94 @@
+ /**
+- * @file lvgl_scenario2.c — 场景二：静态透明底 + 线框楼群 (Phase 1)
++ * @file lvgl_scenario2.c — 场景二：导航车道 + 两侧楼群 parallax 后移 (Phase 2)
+  */
+ 
+ #include "lvgl/lvgl.h"
+ #include "lvgl_demos.h"
+ 
+-#if LV_USE_3D && LV_USE_3D_WIDGETS
++#if LV_USE_3D && LV_USE_3D_WIDGETS && LV_USE_3D_SEGMENT_POOL
++
++#include <stdlib.h>
++
++/** Buildings per side = (3..6) * this factor (default 1). */
++#ifndef LVGL_S2_BUILDING_MUL
++    #define LVGL_S2_BUILDING_MUL 1
++#endif
++#define S2_SEGMENT_LENGTH 420.0f
++
++static lv_3d_segment_pool_t * g_pool;
++
++static void spawn_building(lv_obj_t * root, float x, float y, float z, float w, float h, float d, lv_color_t c)
++{
++    lv_obj_t * m = lv_3dmesh_create(root);
++    lv_3dmesh_set_box(m, w, h, d);
++    lv_3dmesh_set_wireframe(m, true);
++    lv_3dmesh_set_color(m, c);
++    lv_3dmesh_set_position(m, x, y, z);
++}
++
++static void s2_build_segment(lv_obj_t * segment_root, uint32_t seg_id, float seg_base_z, void * user)
++{
++    LV_UNUSED(user);
++    const uint32_t seed = seg_id * 1103515245u + 12345u;
++    const lv_color_t colors[] = {
++        lv_color_hex(0x00FFAA),
++        lv_color_hex(0x26C6DA),
++        lv_color_hex(0x66BB6A),
++        lv_color_hex(0xAB47BC),
++    };
++
++    for(int side = 0; side < 2; side++) {
++        const float x_sign = side ? 1.0f : -1.0f;
++        const int base_count = 3 + (int)((seed >> (side * 4)) & 3u);
++        const int count = base_count * LVGL_S2_BUILDING_MUL;
++        const float z_step = (S2_SEGMENT_LENGTH * 0.92f) / (float)(count > 0 ? count : 1);
++        for(int i = 0; i < count; i++) {
++            uint32_t h = seed + (uint32_t)(side * 17 + i * 31);
++            float w = 60.0f + (float)(h % 50);
++            float bh = 120.0f + (float)(h % 180);
++            float d = 55.0f + (float)((h >> 3) % 40);
++            float x = x_sign * (160.0f + (float)((h + (uint32_t)i * 13u) % 300));
++            float z = seg_base_z - 16.0f - (float)i * z_step - (float)(h % 12);
++            lv_color_t c = colors[(h >> 5) % 4];
++            spawn_building(segment_root, x, bh * 0.5f, z, w, bh, d, c);
++        }
++    }
++}
++
++static void pool_timer_cb(lv_timer_t * t)
++{
++    LV_UNUSED(t);
++    if(g_pool) lv_3d_segment_pool_tick(g_pool, 0.016f);
++}
++
++static void lane_overlay_create(lv_obj_t * scr)
++{
++    lv_obj_t * lane = lv_obj_create(scr);
++    lv_obj_set_size(lane, 140, 300);
++    lv_obj_align(lane, LV_ALIGN_BOTTOM_MID, 0, -36);
++    lv_obj_set_style_bg_color(lane, lv_color_hex(0x1565C0), 0);
++    lv_obj_set_style_bg_opa(lane, LV_OPA_70, 0);
++    lv_obj_set_style_border_color(lane, lv_color_hex(0x42A5F5), 0);
++    lv_obj_set_style_border_width(lane, 3, 0);
++    lv_obj_set_style_radius(lane, 12, 0);
++    lv_obj_remove_flag(lane, LV_OBJ_FLAG_SCROLLABLE);
++
++    lv_obj_t * chevron = lv_label_create(lane);
++    lv_label_set_text(chevron, LV_SYMBOL_UP "\n" LV_SYMBOL_UP "\n" LV_SYMBOL_UP);
++    lv_obj_set_style_text_color(chevron, lv_color_hex(0xE3F2FD), 0);
++    lv_obj_set_style_text_align(chevron, LV_TEXT_ALIGN_CENTER, 0);
++    lv_obj_center(chevron);
++
++    lv_obj_t * hint = lv_label_create(scr);
++    lv_label_set_text(hint, "NAV");
++    lv_obj_set_style_text_color(hint, lv_color_hex(0xFFFFFF), 0);
++    lv_obj_set_style_bg_color(hint, lv_color_hex(0x0D47A1), 0);
++    lv_obj_set_style_bg_opa(hint, LV_OPA_80, 0);
++    lv_obj_set_style_pad_hor(hint, 12, 0);
++    lv_obj_set_style_pad_ver(hint, 4, 0);
++    lv_obj_set_style_radius(hint, 6, 0);
++    lv_obj_align(hint, LV_ALIGN_TOP_MID, 0, 24);
++}
+ 
+ void lvgl_scenario2_skyline_create(void)
+ {
+@@ -16,8 +99,8 @@ void lvgl_scenario2_skyline_create(void)
+     lv_obj_t * cam = lv_3dcamera_create(scr);
+     lv_3dcamera_set_perspective(cam, 50.0f, 10.0f, 8000.0f);
+     lv_3dcamera_look_at(cam,
+-                        (lv_vec3_t) { 0, 350, 1200 },
+-                        (lv_vec3_t) { 0, 80, 0 },
++                        (lv_vec3_t) { 0, 320, 1100 },
++                        (lv_vec3_t) { 0, 60, 0 },
+                         (lv_vec3_t) { 0, 1, 0 });
+ 
+     lv_obj_t * scene = lv_3dscene_create(scr);
+@@ -26,24 +109,49 @@ void lvgl_scenario2_skyline_create(void)
+     lv_3dviewport_set_camera(vp, cam);
+     lv_3dviewport_set_scene(vp, scene);
+ 
+-    static const struct { float x, z, w, h, d; } buildings[] = {
+-        {-420, -200, 90, 220, 90}, {-280, -350, 70, 160, 70}, {-140, -500, 110, 280, 100},
+-        {140, -480, 85, 200, 85}, {300, -320, 95, 240, 95}, {450, -180, 75, 170, 75},
+-        {-60, -650, 130, 320, 110}, {80, -620, 100, 260, 90},
+-        {0, -300, 60, 140, 60},
++    lv_3d_segment_pool_cfg_t cfg = {
++        .segment_length = 420.0f,
++        .scroll_speed = 140.0f,
++        .pool_size = 8,
++        .recycle_z = 1350.0f,
+     };
++    const char * spd_env = getenv("LVGL_SCENARIO2_SCROLL_SPEED");
++    if(spd_env && spd_env[0]) cfg.scroll_speed = (float)atof(spd_env);
++    g_pool = lv_3d_segment_pool_create(scene, &cfg);
++    lv_3d_segment_pool_set_build_fn(g_pool, s2_build_segment, NULL);
+ 
+-    for(size_t i = 0; i < sizeof(buildings) / sizeof(buildings[0]); i++) {
+-        lv_obj_t * m = lv_3dmesh_create(scene);
+-        lv_3dmesh_set_box(m, buildings[i].w, buildings[i].h, buildings[i].d);
+-        lv_3dmesh_set_wireframe(m, true);
+-        lv_3dmesh_set_color(m, lv_color_hex(0x00FFAA));
+-        lv_3dmesh_set_position(m, buildings[i].x, buildings[i].h * 0.5f, buildings[i].z);
+-    }
++    lane_overlay_create(scr);
++    lv_timer_create(pool_timer_cb, 16, NULL);
++}
++
++uint32_t lvgl_scenario2_get_recycle_count(void)
++{
++    if(!g_pool) return 0;
++    lv_3d_segment_pool_stats_t st;
++    lv_3d_segment_pool_get_stats(g_pool, &st);
++    return st.recycle_count;
++}
++
++float lvgl_scenario2_get_min_seg_z(void)
++{
++    if(!g_pool) return 0.0f;
++    lv_3d_segment_pool_stats_t st;
++    lv_3d_segment_pool_get_stats(g_pool, &st);
++    return st.min_seg_z;
+ }
+ 
+ #else
+ 
+ void lvgl_scenario2_skyline_create(void) {}
+ 
++uint32_t lvgl_scenario2_get_recycle_count(void)
++{
++    return 0;
++}
++
++float lvgl_scenario2_get_min_seg_z(void)
++{
++    return 0.0f;
++}
++
+ #endif
+diff --git a/src/demos/lvgl_verify.c b/src/demos/lvgl_verify.c
+index 5dd25bb..cd64efc 100644
+--- a/src/demos/lvgl_verify.c
++++ b/src/demos/lvgl_verify.c
+@@ -5,8 +5,11 @@
+ #include "lvgl/lvgl.h"
+ #include "lvgl_demos.h"
+ 
+-#if LV_USE_DRAW_GPU_COMPOSITE
++#if LV_USE_3D && LV_USE_DRAW_GPU_COMPOSITE
+ #include "draw/gpu_composite/lv_draw_gpu_composite.h"
++#if LV_USE_SNAPSHOT
++#include "lvgl/3d/lv_3d_plane_bake.h"
++#endif
+ #endif
+ 
+ #include <stdio.h>
+@@ -19,6 +22,8 @@ static int frames_to_check;
+ static int frames_checked;
+ static int frames_seen;
+ static uint32_t last_verified_serial;
++static float s2_min_z_first;
++static float s2_min_z_last;
+ 
+ #if LV_USE_3D && LV_USE_DRAW_GPU_COMPOSITE
+ 
+@@ -29,6 +34,51 @@ static int env_int(const char * name, int default_val)
+     return atoi(v);
+ }
+ 
++static int env_bool(const char * name, int default_val)
++{
++    const char * v = getenv(name);
++    if(!v || !v[0]) return default_val;
++    return atoi(v) != 0;
++}
++
++static void verify_log_path_stats(const lv_gpu_composite_verify_stats_t * s)
++{
++    if(s->gl_renderer[0]) {
++        printf("LVGL_VERIFY: path renderer=%s gpu2d=%u gpu3d=%u sw_overlay=%u sw_raster=%u\n",
++               s->gl_renderer,
++               (unsigned)s->gpu_2d_tasks,
++               (unsigned)s->gpu_3d_draws,
++               (unsigned)s->sw_overlay_uploads,
++               (unsigned)s->sw_2d_raster_tasks);
++    }
++    else {
++        printf("LVGL_VERIFY: path gpu2d=%u gpu3d=%u sw_overlay=%u sw_raster=%u\n",
++               (unsigned)s->gpu_2d_tasks,
++               (unsigned)s->gpu_3d_draws,
++               (unsigned)s->sw_overlay_uploads,
++               (unsigned)s->sw_2d_raster_tasks);
++    }
++}
++
++static int verify_gpu_path(const lv_gpu_composite_verify_stats_t * s)
++{
++    if(!env_bool("LVGL_VERIFY_GPU_PATH", 0)) return 1;
++
++    if(scenario_id == 2) {
++        if(s->gpu_2d_tasks < 1) {
++            printf("LVGL_VERIFY: FAIL gpu_path scenario=2 gpu_2d_tasks=%u (expect >=1)\n",
++                   (unsigned)s->gpu_2d_tasks);
++            return 0;
++        }
++        if(s->sw_overlay_uploads != 0) {
++            printf("LVGL_VERIFY: FAIL gpu_path scenario=2 sw_overlay_uploads=%u (expect 0)\n",
++                   (unsigned)s->sw_overlay_uploads);
++            return 0;
++        }
++    }
++    return 1;
++}
++
+ static int verify_frame_content(int frame_idx, const lv_gpu_composite_verify_stats_t * s)
+ {
+     if(s->last_flush_viewports < 1) {
+@@ -130,7 +180,38 @@ static void verify_one_frame(lv_display_t * disp)
+         exit(1);
+     }
+ 
++    if(!verify_gpu_path(&stats)) {
++        verify_done = 1;
++        exit(1);
++    }
++
++#if LV_USE_3D_SEGMENT_POOL
++    if(scenario_id == 2) {
++        const float min_z = lvgl_scenario2_get_min_seg_z();
++        if(frames_checked == 0) s2_min_z_first = min_z;
++        s2_min_z_last = min_z;
++    }
++#endif
++
+     frames_checked++;
++    verify_log_path_stats(&stats);
++
++#if LV_USE_SNAPSHOT
++    if(scenario_id == 1 && frame_idx == 1 && getenv("LVGL_VERIFY_DUMP")) {
++        const char * dump_dir = getenv("LVGL_VERIFY_DUMP");
++        char frame_path[512];
++        char snap_path[512];
++        lv_snprintf(frame_path, sizeof(frame_path), "%s/frame_lvgl.rgba", dump_dir);
++        lv_snprintf(snap_path, sizeof(snap_path), "%s/snap1_lvgl.rgba", dump_dir);
++        if(lv_gpu_composite_dump_frame_lvgl(disp, frame_path)) {
++            printf("LVGL_VERIFY: dump frame -> %s\n", frame_path);
++        }
++        if(lv_3d_plane_dump_snapshot_lvgl(1, snap_path)) {
++            printf("LVGL_VERIFY: dump snap1 -> %s\n", snap_path);
++        }
++    }
++#endif
++
+     printf("LVGL_VERIFY: frame %d/%d ok corner_a=%u max_a=%u flush_max=%u flush_items=%u visible=%u\n",
+            frame_idx, frames_to_check,
+            (unsigned)stats.corner_min_alpha,
+@@ -140,8 +221,24 @@ static void verify_one_frame(lv_display_t * disp)
+            (unsigned)stats.region_visible_count);
+ 
+     if(frames_checked >= frames_to_check) {
++#if LV_USE_3D_SEGMENT_POOL
++        if(scenario_id == 2) {
++            const uint32_t recycled = lvgl_scenario2_get_recycle_count();
++            const float dz = s2_min_z_last - s2_min_z_first;
++            if(recycled < 1 && dz < 80.0f) {
++                printf("LVGL_VERIFY: FAIL scenario=2 parallax min_z %.1f -> %.1f (dz=%.1f) recycle=%u\n",
++                       s2_min_z_first, s2_min_z_last, dz, (unsigned)recycled);
++                verify_done = 1;
++                exit(1);
++            }
++            printf("LVGL_VERIFY: scenario2 parallax ok dz=%.1f recycle=%u\n", dz, (unsigned)recycled);
++        }
++#endif
+         printf("LVGL_VERIFY: PASS scenario=%d checked_frames=%d seen_frames=%d samples_per_frame=%u\n",
+                scenario_id, frames_to_check, frames_seen, (unsigned)stats.region_samples);
++        if(env_bool("LVGL_VERIFY_GPU_PATH", scenario_id == 2 ? 1 : 0)) {
++            printf("LVGL_VERIFY: gpu_path PASS scenario=%d\n", scenario_id);
++        }
+         verify_done = 1;
+         exit(0);
+     }
+@@ -166,6 +263,8 @@ int lvgl_verify_run(int id)
+     frames_seen = 0;
+     frames_checked = 0;
+     last_verified_serial = 0;
++    s2_min_z_first = 0.0f;
++    s2_min_z_last = 0.0f;
+     warmup_left = env_int("LVGL_VERIFY_WARMUP", 8);
+     frames_to_check = env_int("LVGL_VERIFY_FRAMES", 60);
+     if(frames_to_check < 1) frames_to_check = 1;
+-- 
+2.34.1
+

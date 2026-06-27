@@ -1,0 +1,430 @@
+From e769031575e4e08cc789260ca245fd2ba07815ba Mon Sep 17 00:00:00 2001
+From: gz <gz@local>
+Date: Sat, 27 Jun 2026 21:55:49 +0800
+Subject: [PATCH 3/3] Add lv_appwindow widget and fix 3dstack row Y for
+ near-at-bottom layout.
+
+Introduce app UI container with pause/resume and thumbnail snapshot for
+scenario 1 PLANE tiles; flip stack row Y so row 0 renders at screen bottom.
+
+Co-authored-by: Cursor <cursoragent@cursor.com>
+---
+ include/lvgl/lvgl.h                          |   1 +
+ include/lvgl/widgets/lv_appwindow.h          | 100 ++++++++++
+ lv_conf_template.h                           |   3 +
+ src/widgets/3d/lv_3dstack.c                  |   3 +-
+ src/widgets/appwindow/lv_appwindow.c         | 198 +++++++++++++++++++
+ src/widgets/appwindow/lv_appwindow_private.h |  49 +++++
+ 6 files changed, 353 insertions(+), 1 deletion(-)
+ create mode 100644 include/lvgl/widgets/lv_appwindow.h
+ create mode 100644 src/widgets/appwindow/lv_appwindow.c
+ create mode 100644 src/widgets/appwindow/lv_appwindow_private.h
+
+diff --git a/include/lvgl/lvgl.h b/include/lvgl/lvgl.h
+index 1c1fc0431..c98291f33 100644
+--- a/include/lvgl/lvgl.h
++++ b/include/lvgl/lvgl.h
+@@ -223,6 +223,7 @@
+ #include "widgets/lv_tabview.h"
+ #include "widgets/lv_textarea.h"
+ #include "widgets/lv_tileview.h"
++#include "widgets/lv_appwindow.h"
+ #include "widgets/lv_win.h"
+ 
+ /* Define LV_DISABLE_API_MAPPING using a compiler option
+diff --git a/include/lvgl/widgets/lv_appwindow.h b/include/lvgl/widgets/lv_appwindow.h
+new file mode 100644
+index 000000000..6c74edbb1
+--- /dev/null
++++ b/include/lvgl/widgets/lv_appwindow.h
+@@ -0,0 +1,100 @@
++/**
++ * @file lv_appwindow.h
++ * App UI container for launcher-style multi-app UI (Activity-like subtree + thumbnail).
++ */
++
++#ifndef LV_APPWINDOW_H
++#define LV_APPWINDOW_H
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++/*********************
++ *      INCLUDES
++ *********************/
++#include "../config/lv_conf_internal.h"
++#include "../core/lv_obj.h"
++
++#if LV_USE_APPWINDOW
++
++#if LV_USE_SNAPSHOT
++#include "../draw/lv_draw.h"
++#endif
++#if LV_USE_3D && LV_USE_SNAPSHOT
++#include "../3d/lv_3d_plane_bake.h"
++#endif
++
++/*********************
++ *      DEFINES
++ *********************/
++
++LV_ATTRIBUTE_EXTERN_DATA extern const lv_obj_class_t lv_appwindow_class;
++
++/**********************
++ *      TYPEDEFS
++ **********************/
++
++typedef enum {
++    LV_APPWINDOW_STATE_CREATED,
++    LV_APPWINDOW_STATE_RESUMED,
++    LV_APPWINDOW_STATE_PAUSED,
++} lv_appwindow_state_t;
++
++typedef void (*lv_appwindow_lifecycle_cb_t)(lv_obj_t * appwindow, void * user_data);
++
++/**********************
++ * GLOBAL PROTOTYPES
++ **********************/
++
++/**
++ * Create an app window (hidden by default; build UI under lv_appwindow_get_content()).
++ */
++lv_obj_t * lv_appwindow_create(lv_obj_t * parent);
++
++/**
++ * Content container for application widgets (labels, buttons, …).
++ */
++lv_obj_t * lv_appwindow_get_content(lv_obj_t * appwindow);
++
++lv_appwindow_state_t lv_appwindow_get_state(lv_obj_t * appwindow);
++bool lv_appwindow_is_resumed(lv_obj_t * appwindow);
++
++/**
++ * Show content and mark as foreground app. Calls optional on_resume callback.
++ */
++void lv_appwindow_resume(lv_obj_t * appwindow);
++
++/**
++ * Capture thumbnail from content, hide window, mark paused. Calls optional on_pause callback.
++ */
++void lv_appwindow_pause(lv_obj_t * appwindow);
++
++/**
++ * Capture content into thumbnail buffer (and plane snapshot when 3D bake is enabled).
++ * Can be called while paused (e.g. before first launcher tile display).
++ */
++bool lv_appwindow_capture_thumbnail(lv_obj_t * appwindow);
++
++#if LV_USE_SNAPSHOT
++/** Last captured thumbnail pixels, or NULL if none. Do not free; owned by appwindow. */
++const lv_draw_buf_t * lv_appwindow_get_thumbnail(lv_obj_t * appwindow);
++#endif
++
++#if LV_USE_3D && LV_USE_SNAPSHOT
++/** Snapshot id for 3D PLANE tiles; LV_3D_SNAPSHOT_ID_NONE if unavailable. */
++lv_3d_snapshot_id_t lv_appwindow_get_snapshot_id(lv_obj_t * appwindow);
++#endif
++
++void lv_appwindow_set_lifecycle_cb(lv_obj_t * appwindow,
++                                  lv_appwindow_lifecycle_cb_t on_resume,
++                                  lv_appwindow_lifecycle_cb_t on_pause,
++                                  void * user_data);
++
++#endif /*LV_USE_APPWINDOW*/
++
++#ifdef __cplusplus
++} /*extern "C"*/
++#endif
++
++#endif /*LV_APPWINDOW_H*/
+diff --git a/lv_conf_template.h b/lv_conf_template.h
+index de3e7fb24..8a02476af 100644
+--- a/lv_conf_template.h
++++ b/lv_conf_template.h
+@@ -938,6 +938,9 @@
+ 
+ #define LV_USE_WIN        1
+ 
++/** App UI container with pause/resume and thumbnail snapshot (launcher multi-app). Requires LV_USE_SNAPSHOT. */
++#define LV_USE_APPWINDOW  0
++
+ #define LV_USE_3DTEXTURE  0
+ 
+ /*==================
+diff --git a/src/widgets/3d/lv_3dstack.c b/src/widgets/3d/lv_3dstack.c
+index 1ac30b61f..67f817453 100644
+--- a/src/widgets/3d/lv_3dstack.c
++++ b/src/widgets/3d/lv_3dstack.c
+@@ -71,7 +71,8 @@ void lv_3dstack_layout(lv_obj_t * obj)
+             lv_obj_t * tile = lv_obj_get_child(obj, idx);
+             if(lv_obj_check_type(tile, &lv_3dmesh_class)) {
+                 float cx = (float)c - (stack->cols - 1) * 0.5f;
+-                float cy = (float)r - (stack->rows - 1) * 0.5f;
++                /* cy: row 0 = near → +Y so after display Y-flip it sits at screen bottom */
++                float cy = (stack->rows - 1) * 0.5f - (float)r;
+                 lv_3dmesh_set_position(tile, cx * stack->x_gap, cy * stack->y_gap, stack->row_z[r]);
+                 float sc = 1.0f - r * 0.08f;
+                 lv_3dmesh_set_scale(tile, sc, sc, sc);
+diff --git a/src/widgets/appwindow/lv_appwindow.c b/src/widgets/appwindow/lv_appwindow.c
+new file mode 100644
+index 000000000..c21072785
+--- /dev/null
++++ b/src/widgets/appwindow/lv_appwindow.c
+@@ -0,0 +1,198 @@
++/**
++ * @file lv_appwindow.c
++ */
++
++#include "lv_appwindow_private.h"
++#include "../../include/lvgl/widgets/lv_appwindow.h"
++
++#if LV_USE_APPWINDOW
++
++#if !LV_USE_SNAPSHOT
++    #error "LV_USE_APPWINDOW requires LV_USE_SNAPSHOT"
++#endif
++
++#include "../../core/lv_obj_class_private.h"
++
++#if LV_USE_SNAPSHOT
++#include "../../include/lvgl/draw/lv_snapshot.h"
++#endif
++
++#define MY_CLASS (&lv_appwindow_class)
++
++static void lv_appwindow_constructor(const lv_obj_class_t * class_p, lv_obj_t * obj);
++static void lv_appwindow_destructor(const lv_obj_class_t * class_p, lv_obj_t * obj);
++static bool appwindow_capture_thumbnail(lv_appwindow_t * aw);
++
++const lv_obj_class_t lv_appwindow_class = {
++    .constructor_cb = lv_appwindow_constructor,
++    .destructor_cb = lv_appwindow_destructor,
++    .width_def = LV_DPI_DEF,
++    .height_def = LV_DPI_DEF,
++    .instance_size = sizeof(lv_appwindow_t),
++    .base_class = &lv_obj_class,
++    .name = "appwindow",
++};
++
++lv_obj_t * lv_appwindow_create(lv_obj_t * parent)
++{
++    lv_obj_t * obj = lv_obj_class_create_obj(MY_CLASS, parent);
++    lv_obj_class_init_obj(obj);
++    return obj;
++}
++
++lv_obj_t * lv_appwindow_get_content(lv_obj_t * appwindow)
++{
++    LV_ASSERT_OBJ(appwindow, MY_CLASS);
++    lv_appwindow_t * aw = (lv_appwindow_t *)appwindow;
++    return aw->content;
++}
++
++lv_appwindow_state_t lv_appwindow_get_state(lv_obj_t * appwindow)
++{
++    LV_ASSERT_OBJ(appwindow, MY_CLASS);
++    return ((lv_appwindow_t *)appwindow)->state;
++}
++
++bool lv_appwindow_is_resumed(lv_obj_t * appwindow)
++{
++    return lv_appwindow_get_state(appwindow) == LV_APPWINDOW_STATE_RESUMED;
++}
++
++void lv_appwindow_set_lifecycle_cb(lv_obj_t * appwindow,
++                                   lv_appwindow_lifecycle_cb_t on_resume,
++                                   lv_appwindow_lifecycle_cb_t on_pause,
++                                   void * user_data)
++{
++    LV_ASSERT_OBJ(appwindow, MY_CLASS);
++    lv_appwindow_t * aw = (lv_appwindow_t *)appwindow;
++    aw->on_resume = on_resume;
++    aw->on_pause = on_pause;
++    aw->user_data = user_data;
++}
++
++void lv_appwindow_resume(lv_obj_t * appwindow)
++{
++    LV_ASSERT_OBJ(appwindow, MY_CLASS);
++    lv_appwindow_t * aw = (lv_appwindow_t *)appwindow;
++
++    if(aw->state == LV_APPWINDOW_STATE_RESUMED) return;
++
++    lv_obj_remove_flag(appwindow, LV_OBJ_FLAG_HIDDEN);
++    lv_obj_move_foreground(appwindow);
++    aw->state = LV_APPWINDOW_STATE_RESUMED;
++
++    if(aw->on_resume) aw->on_resume(appwindow, aw->user_data);
++    lv_obj_invalidate(appwindow);
++}
++
++void lv_appwindow_pause(lv_obj_t * appwindow)
++{
++    LV_ASSERT_OBJ(appwindow, MY_CLASS);
++    lv_appwindow_t * aw = (lv_appwindow_t *)appwindow;
++
++    if(aw->state == LV_APPWINDOW_STATE_PAUSED) return;
++
++    appwindow_capture_thumbnail(aw);
++
++    lv_obj_add_flag(appwindow, LV_OBJ_FLAG_HIDDEN);
++    aw->state = LV_APPWINDOW_STATE_PAUSED;
++
++    if(aw->on_pause) aw->on_pause(appwindow, aw->user_data);
++}
++
++bool lv_appwindow_capture_thumbnail(lv_obj_t * appwindow)
++{
++    LV_ASSERT_OBJ(appwindow, MY_CLASS);
++    return appwindow_capture_thumbnail((lv_appwindow_t *)appwindow);
++}
++
++#if LV_USE_SNAPSHOT
++const lv_draw_buf_t * lv_appwindow_get_thumbnail(lv_obj_t * appwindow)
++{
++    LV_ASSERT_OBJ(appwindow, MY_CLASS);
++    lv_appwindow_t * aw = (lv_appwindow_t *)appwindow;
++    return aw->thumb_buf;
++}
++#endif
++
++#if LV_USE_3D && LV_USE_SNAPSHOT
++lv_3d_snapshot_id_t lv_appwindow_get_snapshot_id(lv_obj_t * appwindow)
++{
++    LV_ASSERT_OBJ(appwindow, MY_CLASS);
++    lv_appwindow_t * aw = (lv_appwindow_t *)appwindow;
++    if(aw->snap_id == LV_3D_SNAPSHOT_ID_NONE && aw->content) {
++        appwindow_capture_thumbnail(aw);
++    }
++    return aw->snap_id;
++}
++#endif
++
++static void lv_appwindow_constructor(const lv_obj_class_t * class_p, lv_obj_t * obj)
++{
++    LV_UNUSED(class_p);
++    lv_appwindow_t * aw = (lv_appwindow_t *)obj;
++
++    aw->state = LV_APPWINDOW_STATE_CREATED;
++#if LV_USE_SNAPSHOT
++    aw->thumb_buf = NULL;
++#endif
++#if LV_USE_3D && LV_USE_SNAPSHOT
++    aw->snap_id = LV_3D_SNAPSHOT_ID_NONE;
++#endif
++    aw->on_resume = NULL;
++    aw->on_pause = NULL;
++    aw->user_data = NULL;
++
++    lv_obj_remove_flag(obj, LV_OBJ_FLAG_SCROLLABLE);
++    lv_obj_add_flag(obj, LV_OBJ_FLAG_HIDDEN);
++
++    aw->content = lv_obj_create(obj);
++    lv_obj_set_size(aw->content, LV_PCT(100), LV_PCT(100));
++    lv_obj_set_style_pad_all(aw->content, 0, 0);
++    lv_obj_set_style_border_width(aw->content, 0, 0);
++    lv_obj_remove_flag(aw->content, LV_OBJ_FLAG_SCROLLABLE);
++
++    aw->state = LV_APPWINDOW_STATE_PAUSED;
++}
++
++static void lv_appwindow_destructor(const lv_obj_class_t * class_p, lv_obj_t * obj)
++{
++    LV_UNUSED(class_p);
++    lv_appwindow_t * aw = (lv_appwindow_t *)obj;
++
++#if LV_USE_SNAPSHOT
++    if(aw->thumb_buf) {
++        lv_draw_buf_destroy(aw->thumb_buf);
++        aw->thumb_buf = NULL;
++    }
++#endif
++#if LV_USE_3D && LV_USE_SNAPSHOT
++    if(aw->content) lv_3d_plane_invalidate(aw->content);
++    aw->snap_id = LV_3D_SNAPSHOT_ID_NONE;
++#endif
++}
++
++static bool appwindow_capture_thumbnail(lv_appwindow_t * aw)
++{
++    if(!aw || !aw->content) return false;
++
++    lv_obj_update_layout(aw->content);
++
++#if LV_USE_SNAPSHOT
++    lv_draw_buf_t * snap = lv_snapshot_take(aw->content, LV_COLOR_FORMAT_ARGB8888);
++    if(!snap) return false;
++
++    if(aw->thumb_buf) lv_draw_buf_destroy(aw->thumb_buf);
++    aw->thumb_buf = snap;
++#else
++    return false;
++#endif
++
++#if LV_USE_3D && LV_USE_SNAPSHOT
++    aw->snap_id = lv_3d_plane_bake(aw->content, LV_3D_PLANE_SRC_SNAPSHOT);
++#endif
++
++    return true;
++}
++
++#endif /*LV_USE_APPWINDOW*/
+diff --git a/src/widgets/appwindow/lv_appwindow_private.h b/src/widgets/appwindow/lv_appwindow_private.h
+new file mode 100644
+index 000000000..6fcca83da
+--- /dev/null
++++ b/src/widgets/appwindow/lv_appwindow_private.h
+@@ -0,0 +1,49 @@
++/**
++ * @file lv_appwindow_private.h
++ */
++
++#ifndef LV_APPWINDOW_PRIVATE_H
++#define LV_APPWINDOW_PRIVATE_H
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++#include "../../core/lv_obj_private.h"
++#include "../../lvgl_public.h"
++
++#if LV_USE_APPWINDOW
++
++#include "../../include/lvgl/widgets/lv_appwindow.h"
++
++#if LV_USE_SNAPSHOT
++#include "../../include/lvgl/draw/lv_draw_buf.h"
++#endif
++#if LV_USE_3D && LV_USE_SNAPSHOT
++#include "../../include/lvgl/3d/lv_3d_plane_bake.h"
++#endif
++
++typedef struct {
++    lv_obj_t obj;
++    lv_obj_t * content;
++    lv_appwindow_state_t state;
++#if LV_USE_SNAPSHOT
++    lv_draw_buf_t * thumb_buf;
++#endif
++#if LV_USE_3D && LV_USE_SNAPSHOT
++    lv_3d_snapshot_id_t snap_id;
++#endif
++    lv_appwindow_lifecycle_cb_t on_resume;
++    lv_appwindow_lifecycle_cb_t on_pause;
++    void * user_data;
++} lv_appwindow_t;
++
++extern const lv_obj_class_t lv_appwindow_class;
++
++#endif /*LV_USE_APPWINDOW*/
++
++#ifdef __cplusplus
++} /*extern "C"*/
++#endif
++
++#endif /*LV_APPWINDOW_PRIVATE_H*/
+-- 
+2.34.1
+
