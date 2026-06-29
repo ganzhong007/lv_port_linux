@@ -76,6 +76,15 @@ static int verify_gpu_path(const lv_gpu_composite_verify_stats_t * s)
             return 0;
         }
     }
+    if(scenario_id == 3) {
+        const int expect = lvgl_scenario3_get_mesh_count();
+        const uint32_t min_draws = expect > 0 ? (uint32_t)(expect * 3 / 4) : 80u;
+        if(s->gpu_3d_draws < min_draws) {
+            printf("LVGL_VERIFY: FAIL gpu_path scenario=3 gpu_3d_draws=%u (expect >=%u)\n",
+                   (unsigned)s->gpu_3d_draws, (unsigned)min_draws);
+            return 0;
+        }
+    }
     return 1;
 }
 
@@ -127,6 +136,27 @@ static int verify_frame_content(int frame_idx, const lv_gpu_composite_verify_sta
         if(s->region_colorful_count < 32) {
             printf("LVGL_VERIFY: FAIL scenario=%d frame=%d colorful=%u (expect colored tiles)\n",
                    scenario_id, frame_idx, (unsigned)s->region_colorful_count);
+            return 0;
+        }
+        return 1;
+    }
+
+    if(scenario_id == 3) {
+        const int expect = lvgl_scenario3_get_mesh_count();
+        const uint32_t min_items = expect > 0 ? (uint32_t)(expect * 3 / 4) : 80u;
+        if(s->last_flush_items < min_items) {
+            printf("LVGL_VERIFY: FAIL scenario=%d frame=%d flush_items=%u (expect >=%u wireframes)\n",
+                   scenario_id, frame_idx, (unsigned)s->last_flush_items, (unsigned)min_items);
+            return 0;
+        }
+        if(s->region_max_alpha < 24 && s->flush_max_alpha < 24) {
+            printf("LVGL_VERIFY: FAIL scenario=%d frame=%d max_alpha=%u flush_max=%u (expect visible wireframe)\n",
+                   scenario_id, frame_idx, (unsigned)s->region_max_alpha, (unsigned)s->flush_max_alpha);
+            return 0;
+        }
+        if(s->region_visible_count < 8) {
+            printf("LVGL_VERIFY: FAIL scenario=%d frame=%d visible=%u (expect wireframe pixels)\n",
+                   scenario_id, frame_idx, (unsigned)s->region_visible_count);
             return 0;
         }
         return 1;

@@ -11,6 +11,10 @@ extern "C" {
 
 void lvgl_scenario1_launcher_create(void);
 void lvgl_scenario2_skyline_create(void);
+void lvgl_scenario3_gpu_stress_create(void);
+
+/** Active wireframe mesh count (scenario 3 verify). */
+int lvgl_scenario3_get_mesh_count(void);
 
 /** Segment pool recycle count (scenario 2 Phase 2 verify). */
 uint32_t lvgl_scenario2_get_recycle_count(void);

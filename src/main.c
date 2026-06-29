@@ -82,6 +82,9 @@ int main(int argc, char ** argv)
     if(scenario == 1) {
         lvgl_scenario1_launcher_create();
     }
+    else if(scenario == 3) {
+        lvgl_scenario3_gpu_stress_create();
+    }
     else {
         lvgl_scenario2_skyline_create();
     }

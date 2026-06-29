@@ -26,6 +26,12 @@
 #define LVGL_S1_FOCUS_Z      (-220.0f)
 #define LVGL_S1_CAM_EYE_Z    900.0f
 #define LVGL_S1_CAM_FOV_DEG  42.0f
+/** 3D 虚拟背景：蓝天白云（AR 屏幕四角仍透明；3D 视口内填天空） */
+#define LVGL_S1_SKY_Z        (-1280.0f)
+#define LVGL_S1_SKY_W        4600.0f
+#define LVGL_S1_SKY_H        2700.0f
+#define LVGL_S1_SKY_TEX_W    1920
+#define LVGL_S1_SKY_TEX_H    1080
 
 typedef struct {
     lv_obj_t * mesh;
@@ -287,7 +293,209 @@ static int pick_tile_index(int32_t x, int32_t y)
 }
 
 #if LV_USE_SNAPSHOT
+
+#if LV_FONT_SOURCE_HAN_SANS_SC_14_CJK
+LV_FONT_DECLARE(lv_font_source_han_sans_sc_14_cjk)
+#define LVGL_S1_DASH_TEXT_FONT (&lv_font_source_han_sans_sc_14_cjk)
+#else
+#define LVGL_S1_DASH_TEXT_FONT LV_FONT_DEFAULT
+#endif
+
+static void dashboard_clear_panel(lv_obj_t * obj)
+{
+    lv_obj_remove_flag(obj, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_bg_opa(obj, LV_OPA_0, 0);
+    lv_obj_set_style_border_width(obj, 0, 0);
+    lv_obj_set_style_pad_all(obj, 0, 0);
+    lv_obj_set_style_radius(obj, 0, 0);
+    lv_obj_set_style_shadow_width(obj, 0, 0);
+}
+
+static void dashboard_style_text(lv_obj_t * lbl, lv_color_t color, const lv_font_t * font)
+{
+    lv_obj_set_style_text_color(lbl, color, 0);
+    if(font) lv_obj_set_style_text_font(lbl, font, 0);
+}
+
+static void dashboard_style_text_scaled(lv_obj_t * lbl, lv_color_t color, const lv_font_t * font, int32_t scale)
+{
+    dashboard_style_text(lbl, color, font);
+    if(scale != 256) {
+        lv_obj_set_style_transform_pivot_x(lbl, 0, 0);
+        lv_obj_set_style_transform_pivot_y(lbl, 0, 0);
+        lv_obj_set_style_transform_scale(lbl, scale, 0);
+    }
+}
+
+#define LVGL_S1_NEWS_TEXT_SCALE 512
+#define LVGL_S1_NEWS_TEXT_SIZE_PCT 70
+
+static int32_t dashboard_scaled_line_h(const lv_font_t * font, int32_t scale)
+{
+    return (lv_font_get_line_height(font) * scale + 255) / 256;
+}
+
+static lv_obj_t * dashboard_add_news_line(lv_obj_t * parent, const char * text, lv_color_t color, int32_t scale)
+{
+    const lv_font_t * font = LVGL_S1_DASH_TEXT_FONT;
+    const int32_t line_h = dashboard_scaled_line_h(font, scale);
+
+    lv_obj_t * row = lv_obj_create(parent);
+    lv_obj_set_width(row, LV_PCT(100));
+    lv_obj_set_height(row, line_h);
+    dashboard_clear_panel(row);
+    lv_obj_add_flag(row, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
+
+    lv_obj_t * lbl = lv_label_create(row);
+    lv_label_set_text(lbl, text);
+    lv_obj_set_width(lbl, LV_PCT(100));
+    lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);
+    dashboard_style_text_scaled(lbl, color, font, scale);
+    lv_obj_align(lbl, LV_ALIGN_LEFT_MID, 0, 0);
+    return row;
+}
+
+static void dashboard_add_news_block(lv_obj_t * parent, const char * line1, const char * line2,
+                                     int32_t block_h, int32_t scale)
+{
+    lv_obj_t * blk = lv_obj_create(parent);
+    lv_obj_set_width(blk, LV_PCT(100));
+    lv_obj_set_height(blk, block_h);
+    dashboard_clear_panel(blk);
+    lv_obj_add_flag(blk, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
+    lv_obj_set_flex_flow(blk, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(blk, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    lv_obj_set_style_pad_row(blk, 0, 0);
+
+    dashboard_add_news_line(blk, line1, lv_color_hex(0x90A4AE), scale);
+    if(line2 && line2[0] != '\0') {
+        dashboard_add_news_line(blk, line2, lv_color_hex(0xECEFF1), scale);
+    }
+}
+
+static void dashboard_populate(lv_obj_t * cont, int32_t w, int32_t h)
+{
+    lv_obj_remove_flag(cont, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(cont, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
+    lv_obj_set_flex_flow(cont, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(cont, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    lv_obj_set_style_pad_column(cont, 4, 0);
+
+    const int32_t left_w = (w * 1) / 3;
+
+    lv_obj_t * left = lv_obj_create(cont);
+    lv_obj_set_size(left, left_w, LV_PCT(100));
+    dashboard_clear_panel(left);
+    lv_obj_set_flex_flow(left, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(left, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_row(left, 0, 0);
+
+    lv_obj_t * top = lv_obj_create(left);
+    lv_obj_set_width(top, LV_PCT(100));
+    lv_obj_set_flex_grow(top, 1);
+    dashboard_clear_panel(top);
+    lv_obj_set_flex_flow(top, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(top, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_hor(top, 2, 0);
+
+    lv_obj_t * date_lbl = lv_label_create(top);
+    lv_label_set_text(date_lbl, "周日 06/28");
+    dashboard_style_text(date_lbl, lv_color_hex(0xCFD8DC), LVGL_S1_DASH_TEXT_FONT);
+
+    lv_obj_t * batt = lv_label_create(top);
+    lv_label_set_text(batt, LV_SYMBOL_BATTERY_FULL);
+    dashboard_style_text(batt, lv_color_hex(0x69F0AE), LV_FONT_DEFAULT);
+
+    lv_obj_t * mid = lv_obj_create(left);
+    lv_obj_set_width(mid, LV_PCT(100));
+    lv_obj_set_flex_grow(mid, 8);
+    dashboard_clear_panel(mid);
+    lv_obj_set_flex_align(mid, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+    lv_obj_t * time_lbl = lv_label_create(mid);
+    lv_label_set_text(time_lbl, "14:32");
+    dashboard_style_text(time_lbl, lv_color_hex(0xFFFFFF), LV_FONT_DEFAULT);
+    lv_obj_set_style_transform_pivot_x(time_lbl, LV_PCT(50), 0);
+    lv_obj_set_style_transform_pivot_y(time_lbl, LV_PCT(50), 0);
+    lv_obj_set_style_transform_scale(time_lbl, 925, 0);
+
+    lv_obj_t * bot = lv_obj_create(left);
+    lv_obj_set_width(bot, LV_PCT(100));
+    lv_obj_set_flex_grow(bot, 1);
+    dashboard_clear_panel(bot);
+    lv_obj_set_flex_flow(bot, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(bot, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_END);
+    lv_obj_set_style_pad_hor(bot, 2, 0);
+
+    lv_obj_t * temp_row = lv_obj_create(bot);
+    dashboard_clear_panel(temp_row);
+    lv_obj_set_size(temp_row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(temp_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(temp_row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_END);
+    lv_obj_set_style_pad_column(temp_row, 2, 0);
+
+    lv_obj_t * temp_lbl = lv_label_create(temp_row);
+    lv_label_set_text(temp_lbl, "26");
+    dashboard_style_text(temp_lbl, lv_color_hex(0xECEFF1), LV_FONT_DEFAULT);
+
+    lv_obj_t * deg_lbl = lv_label_create(temp_row);
+    lv_label_set_text(deg_lbl, "\xC2\xB0""C");
+    dashboard_style_text(deg_lbl, lv_color_hex(0x90A4AE), LV_FONT_DEFAULT);
+
+    lv_obj_t * bell = lv_label_create(bot);
+    lv_label_set_text(bell, LV_SYMBOL_BELL);
+    dashboard_style_text(bell, lv_color_hex(0xFFD54F), LV_FONT_DEFAULT);
+
+    lv_obj_t * right = lv_obj_create(cont);
+    lv_obj_set_size(right, w - left_w - 4, LV_PCT(100));
+    lv_obj_set_flex_grow(right, 1);
+    lv_obj_remove_flag(right, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(right, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
+    lv_obj_set_style_bg_opa(right, LV_OPA_0, 0);
+    lv_obj_set_style_border_color(right, lv_color_hex(0x78909C), 0);
+    lv_obj_set_style_border_width(right, 1, 0);
+    lv_obj_set_style_radius(right, 4, 0);
+    lv_obj_set_style_pad_all(right, 4, 0);
+    lv_obj_set_style_pad_row(right, 0, 0);
+    lv_obj_set_flex_flow(right, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(right, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+
+    const int32_t inner_h = h - 8; /* cont vertical pad */
+    const int32_t right_inner = inner_h - 8; /* right panel vertical pad */
+    const int32_t lh_base = lv_font_get_line_height(LVGL_S1_DASH_TEXT_FONT);
+    const int32_t line_h = right_inner / 5;
+    int32_t news_scale = LVGL_S1_NEWS_TEXT_SCALE;
+    if(lh_base > 0 && line_h > 0) {
+        news_scale = (line_h * 256) / lh_base;
+        if(news_scale < LVGL_S1_NEWS_TEXT_SCALE) news_scale = LVGL_S1_NEWS_TEXT_SCALE;
+        if(news_scale > 896) news_scale = 896;
+        news_scale = (news_scale * LVGL_S1_NEWS_TEXT_SIZE_PCT) / 100;
+    }
+
+    dashboard_add_news_block(right, "ETDay 新闻云     06/27", "快讯/五县市大雨特报", line_h * 2, news_scale);
+    dashboard_add_news_block(right, "CNA 中央通讯社   06/27", "阿联飞弹警报误发出", line_h * 2, news_scale);
+    dashboard_add_news_block(right, "ETDay 新闻云   06/27", NULL, line_h, news_scale);
+}
+
 #if LV_USE_APPWINDOW
+static lv_obj_t * create_dashboard_thumb(lv_obj_t * parent, int32_t w, int32_t h)
+{
+    lv_obj_t * app = lv_appwindow_create(parent);
+    lv_obj_set_size(app, w, h);
+    lv_obj_t * cont = lv_appwindow_get_content(app);
+    lv_obj_set_style_bg_color(cont, lv_color_hex(0x0D1117), 0);
+    lv_obj_set_style_bg_opa(cont, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(cont, 10, 0);
+    lv_obj_set_style_border_color(cont, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_border_width(cont, 2, 0);
+    lv_obj_set_style_border_opa(cont, LV_OPA_40, 0);
+    lv_obj_set_style_pad_all(cont, 4, 0);
+
+    dashboard_populate(cont, w, h);
+    lv_appwindow_capture_thumbnail(app);
+    return app;
+}
+
 static lv_obj_t * create_thumb_source(lv_obj_t * parent, const char * title, uint32_t color_hex, int32_t w, int32_t h)
 {
     lv_obj_t * app = lv_appwindow_create(parent);
@@ -310,6 +518,23 @@ static lv_obj_t * create_thumb_source(lv_obj_t * parent, const char * title, uin
     return app;
 }
 #else
+static lv_obj_t * create_dashboard_thumb(lv_obj_t * parent, int32_t w, int32_t h)
+{
+    lv_obj_t * cont = lv_obj_create(parent);
+    lv_obj_set_size(cont, w, h);
+    lv_obj_remove_flag(cont, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(cont, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_style_bg_color(cont, lv_color_hex(0x0D1117), 0);
+    lv_obj_set_style_bg_opa(cont, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(cont, 10, 0);
+    lv_obj_set_style_border_color(cont, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_border_width(cont, 2, 0);
+    lv_obj_set_style_border_opa(cont, LV_OPA_40, 0);
+    lv_obj_set_style_pad_all(cont, 4, 0);
+    dashboard_populate(cont, w, h);
+    return cont;
+}
+
 static lv_obj_t * create_thumb_source(lv_obj_t * parent, const char * title, uint32_t color_hex, int32_t w, int32_t h)
 {
     lv_obj_t * cont = lv_obj_create(parent);
@@ -379,50 +604,51 @@ static void add_cloud(lv_obj_t * parent, int32_t cx, int32_t cy, int32_t scale, 
 
 static lv_obj_t * create_sky_texture_source(lv_obj_t * parent)
 {
-    const int32_t tw = 1280;
-    const int32_t th = 720;
-
     lv_obj_t * root = lv_obj_create(parent);
-    lv_obj_set_size(root, tw, th);
+    lv_obj_set_size(root, LVGL_S1_SKY_TEX_W, LVGL_S1_SKY_TEX_H);
     lv_obj_remove_flag(root, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_pad_all(root, 0, 0);
     lv_obj_set_style_border_width(root, 0, 0);
     lv_obj_set_style_radius(root, 0, 0);
-    lv_obj_set_style_bg_color(root, lv_color_hex(0x7ECFFF), 0);
-    lv_obj_set_style_bg_grad_color(root, lv_color_hex(0x3A9BF5), 0);
+    /* 上深下浅，接近真实天空 */
+    lv_obj_set_style_bg_color(root, lv_color_hex(0x1565C0), 0);
+    lv_obj_set_style_bg_grad_color(root, lv_color_hex(0x81D4FA), 0);
     lv_obj_set_style_bg_grad_dir(root, LV_GRAD_DIR_VER, 0);
     lv_obj_set_style_bg_opa(root, LV_OPA_COVER, 0);
 
-    add_cloud(root, 180, 95, 100, LV_OPA_80);
-    add_cloud(root, 520, 155, 110, LV_OPA_70);
-    add_cloud(root, 920, 75, 95, LV_OPA_70);
-    add_cloud(root, 320, 260, 90, LV_OPA_60);
-    add_cloud(root, 780, 220, 105, LV_OPA_70);
-    add_cloud(root, 1050, 300, 85, LV_OPA_50);
+    add_cloud(root, 140, 120, 115, LV_OPA_90);
+    add_cloud(root, 480, 200, 125, LV_OPA_80);
+    add_cloud(root, 860, 90, 110, LV_OPA_80);
+    add_cloud(root, 1180, 180, 100, LV_OPA_80);
+    add_cloud(root, 280, 380, 105, LV_OPA_70);
+    add_cloud(root, 640, 320, 120, LV_OPA_80);
+    add_cloud(root, 980, 420, 95, LV_OPA_70);
+    add_cloud(root, 1520, 340, 90, LV_OPA_70);
+    add_cloud(root, 1680, 120, 85, LV_OPA_60);
     return root;
 }
 
-static void setup_sky_backdrop(lv_obj_t * scene, lv_obj_t * thumb_root)
+static void setup_sky_backdrop(lv_obj_t * scene, lv_obj_t * bake_root)
 {
     lv_obj_t * sky = lv_3dmesh_create(scene);
-    lv_obj_t * src = create_sky_texture_source(thumb_root);
-    mesh_apply_plane_thumb(sky, src, 3200.0f, 1800.0f);
-    lv_3dmesh_set_position(sky, 0.0f, 0.0f, -1750.0f);
+    lv_obj_t * src = create_sky_texture_source(bake_root);
+    mesh_apply_plane_thumb(sky, src, LVGL_S1_SKY_W, LVGL_S1_SKY_H);
+    lv_3dmesh_set_position(sky, 0.0f, 0.0f, LVGL_S1_SKY_Z);
     lv_obj_move_background(sky);
 }
 
 #else /* LV_USE_SNAPSHOT */
 
-static void setup_sky_backdrop(lv_obj_t * scene, lv_obj_t * thumb_root)
+static void setup_sky_backdrop(lv_obj_t * scene, lv_obj_t * bake_root)
 {
-    LV_UNUSED(thumb_root);
+    LV_UNUSED(bake_root);
     lv_obj_t * sky = lv_3dmesh_create(scene);
-    lv_3dmesh_set_box(sky, 3200.0f, 1800.0f, 4.0f);
+    lv_3dmesh_set_box(sky, LVGL_S1_SKY_W, LVGL_S1_SKY_H, 4.0f);
     lv_3dmesh_set_wireframe(sky, false);
     lv_3d_material_t mat;
-    lv_3d_material_init(&mat, LV_3D_MAT_OPAQUE, lv_color_hex(0x5EB3F5), LV_OPA_COVER);
+    lv_3d_material_init(&mat, LV_3D_MAT_OPAQUE, lv_color_hex(0x42A5F5), LV_OPA_COVER);
     lv_3dmesh_set_material(sky, &mat);
-    lv_3dmesh_set_position(sky, 0.0f, 0.0f, -1750.0f);
+    lv_3dmesh_set_position(sky, 0.0f, 0.0f, LVGL_S1_SKY_Z);
     lv_obj_move_background(sky);
 }
 
@@ -574,6 +800,9 @@ static void capture_grid_homes(lv_obj_t * stack)
 
 void lvgl_scenario1_launcher_create(void)
 {
+    lv_display_t * disp = lv_display_get_default();
+    if(disp) lv_display_set_antialiasing(disp, true);
+
     lv_obj_t * scr = lv_screen_active();
     lv_obj_set_style_bg_opa(scr, LV_OPA_0, 0);
     lv_obj_remove_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
@@ -588,10 +817,16 @@ void lvgl_scenario1_launcher_create(void)
     lv_obj_t * scene = lv_3dscene_create(scr);
     g_scene = scene;
 
+    /* 缩略图 bake 树（隐藏）；天空贴图单独 off-screen bake，避免 hidden 父节点影响 snapshot */
     lv_obj_t * thumb_root = lv_obj_create(scr);
     lv_obj_add_flag(thumb_root, LV_OBJ_FLAG_HIDDEN);
 
-    setup_sky_backdrop(scene, thumb_root);
+    lv_obj_t * sky_bake_root = lv_obj_create(scr);
+    lv_obj_set_pos(sky_bake_root, -8000, 0);
+    lv_obj_set_size(sky_bake_root, LVGL_S1_SKY_TEX_W, LVGL_S1_SKY_TEX_H);
+    lv_obj_remove_flag(sky_bake_root, LV_OBJ_FLAG_SCROLLABLE);
+
+    setup_sky_backdrop(scene, sky_bake_root);
 
     lv_obj_t * stack = lv_3dstack_create(scene);
     g_stack = stack;
@@ -609,7 +844,13 @@ void lvgl_scenario1_launcher_create(void)
     for(int i = 0; i < LVGL_S1_GRID_TILES; i++) {
         lv_obj_t * tile = lv_3dmesh_create(stack);
 #if LV_USE_SNAPSHOT
-        lv_obj_t * src = create_thumb_source(thumb_root, app_titles[i], tile_colors[i], LVGL_S1_TILE_W, LVGL_S1_TILE_H);
+        lv_obj_t * src;
+        if(i == 4) {
+            src = create_dashboard_thumb(thumb_root, LVGL_S1_TILE_W, LVGL_S1_TILE_H);
+        }
+        else {
+            src = create_thumb_source(thumb_root, app_titles[i], tile_colors[i], LVGL_S1_TILE_W, LVGL_S1_TILE_H);
+        }
         mesh_apply_plane_thumb(tile, src, LVGL_S1_TILE_W, LVGL_S1_TILE_H);
 #else
         lv_3dmesh_set_box(tile, LVGL_S1_TILE_W, LVGL_S1_TILE_H, 8);

@@ -410,6 +410,8 @@ add_executable(lvglsim
     src/main.c
     src/demos/lvgl_scenario1.c
     src/demos/lvgl_scenario2.c
+    src/demos/s2_nav_car_img.c
+    src/demos/lvgl_scenario3.c
     src/demos/lvgl_verify.c
 )
 
