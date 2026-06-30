@@ -14,10 +14,11 @@
     #define LVGL_S2_BUILDING_MUL 1
 #endif
 #define S2_SEGMENT_LENGTH 420.0f
-#define S2_CAR_TEX_W      280
-#define S2_CAR_TEX_H      187
-#define S2_CAR_PLANE_W    200.0f
-#define S2_CAR_PLANE_H    134.0f
+#define S2_CAR_TEX_W      128
+#define S2_CAR_TEX_H      266
+/* 3D plane size — was 128×266 when tex was 280px wide; scale with tex width. */
+#define S2_CAR_PLANE_W     58.0f
+#define S2_CAR_PLANE_H    122.0f
 
 static lv_3d_segment_pool_t * g_pool;
 
