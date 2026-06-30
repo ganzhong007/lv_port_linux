@@ -206,6 +206,9 @@ static void anim_cb(lv_timer_t * t)
 
 void lvgl_scenario3_gpu_stress_create(void)
 {
+#if LV_USE_DRAW_GPU_COMPOSITE
+    lv_gpu_composite_set_ui_mode(LV_GPU_COMPOSITE_UI_GENERIC);
+#endif
     g_mesh_count = env_int("LVGL_S3_MESH_COUNT", LVGL_S3_MESH_COUNT);
     if(g_mesh_count < 16) g_mesh_count = 16;
     if(g_mesh_count > S3_MESH_MAX) g_mesh_count = S3_MESH_MAX;

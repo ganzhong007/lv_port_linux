@@ -1387,6 +1387,57 @@ flowchart TB
 - `lv_3d_ui_mode.c` 在 refresh 前决定 **哪些 collect 路径启用**
 - **`LV_DISPLAY_RENDER_MODE_EVENT_DRIVEN`**：GridIdle / 停车时无 invalidation → **跳过整帧**（G10）
 
+### 7.7 通用合批算法（Framegraph）
+
+**目标**：任意 LVGL 应用产出标准 DrawTask（含 3D）时，`lv_draw_gpu_composite` 自动 **正确合成 + 能效择优**，不再写死三个 demo 场景。
+
+**四层流水线**：
+
+| 阶段 | 时机 | 模块 | 职责 |
+|------|------|------|------|
+| Record | `lv_refr` dispatch | `lv_gpu_composite_framegraph.c` | 分类 task、`evaluate` 代价分、入队 |
+| Build | `draw_buf_flush` 前 | 同上 | 硬约束排序、shader/material 合批 |
+| Execute | flush | `fg_execute` → GLES2 2D/3D | Clear → 3D → 2D OVERLAY → SW residual |
+| Finish | 帧末 | `glFinish` ×1 | 对齐 VG-Lite `lv_vg_lite_finish` |
+
+**路径择优**（`preference_score` 1..99，低于 SW 的 100 才认领）：
+
+| 路径 | 条件 | 示意分 |
+|------|------|--------|
+| `GPU_3D` | `LV_3D_DRAW_KIND_VIEWPORT_PASS` | 10 |
+| `GPU_NATIVE_2D` | display FB、无旋转/渐变 | 20 |
+| SW / raster | 其余 | 不认领（SW=100） |
+
+**Pass 模板**（`lv_gpu_ui_mode_t` 裁剪，非写死 scenario）：
+
+```
+Clear(α=0) → 3D viewports → 2D OVERLAY batch → SW residual overlay
+```
+
+| `lv_gpu_ui_mode_t` | 3D pass | 2D OVERLAY | 全屏 2D |
+|--------------------|---------|------------|---------|
+| `AR_LAUNCHER` | 开 | 开 | 关 |
+| `NAV_AR` | 开 | 开 | 关 |
+| `APP_FULLSCREEN` | 关 | 关 | 开 |
+| `GENERIC` | 由 task 推导 | 由 task 推导 | 由 task 推导 |
+
+**合批与延迟提交**：
+
+- 2D：按 `prog_fill` / `prog_tex` shader 桶计数（`lv_gpu_composite_gles2_2d_count_shader_batches`）
+- 3D：`lv_gpu_composite_batch_3d.c` 统计同 material 连续段（painter 透明排序不变）
+- `LV_GPU_COMPOSITE_FLUSH_MAX_BATCHES`（默认 8）：每 N 个 batch `glFlush`；帧末单次 `glFinish`
+
+**验收表**（`LVGL_VERIFY` + `LVGL_VERIFY_FG=1`）：
+
+| 测试 | 正确性 | 能效 |
+|------|--------|------|
+| 场景一 AR 9 宫格 | corner α≈0、tile 可见 | `fg_gl_finish_count ≤ 1` |
+| 场景二 NAV 混合 | HUD gpu2d、无 sw_overlay | `fg_batch_count ≥ 1` |
+| 场景三 3D stress + HUD | 线框可见、gpu3d 主导 | `fg_gl_finish_count ≤ 1` |
+| 嵌套 LAYER + 3D | 子层顺序（后续扩展） | 无多余全屏 upload |
+
+**相关源文件**：`lv_gpu_composite_framegraph.c/.h`、`lv_gpu_composite_batch_3d.c`、`lv_draw_gpu_composite.c`（evaluate/dispatch/flush 委托 framegraph）。
+
 ### 7.6 像素格式：RGBA8888 / RGBA5551 / RGB565 等（修订）
 
 **结论摘要**：

@@ -44,20 +44,98 @@ static int env_bool(const char * name, int default_val)
 static void verify_log_path_stats(const lv_gpu_composite_verify_stats_t * s)
 {
     if(s->gl_renderer[0]) {
-        printf("LVGL_VERIFY: path renderer=%s gpu2d=%u gpu3d=%u sw_overlay=%u sw_raster=%u\n",
+        printf("LVGL_VERIFY: path renderer=%s gpu2d=%u gpu3d=%u sw_overlay=%u sw_raster=%u "
+               "fg_pass=%u fg_batch=%u fg_mat=%u gl_finish=%u\n",
                s->gl_renderer,
                (unsigned)s->gpu_2d_tasks,
                (unsigned)s->gpu_3d_draws,
                (unsigned)s->sw_overlay_uploads,
-               (unsigned)s->sw_2d_raster_tasks);
+               (unsigned)s->sw_2d_raster_tasks,
+               (unsigned)s->fg_pass_count,
+               (unsigned)s->fg_batch_count,
+               (unsigned)s->fg_material_batches,
+               (unsigned)s->fg_gl_finish_count);
     }
     else {
-        printf("LVGL_VERIFY: path gpu2d=%u gpu3d=%u sw_overlay=%u sw_raster=%u\n",
+        printf("LVGL_VERIFY: path gpu2d=%u gpu3d=%u sw_overlay=%u sw_raster=%u "
+               "fg_pass=%u fg_batch=%u fg_mat=%u gl_finish=%u\n",
                (unsigned)s->gpu_2d_tasks,
                (unsigned)s->gpu_3d_draws,
                (unsigned)s->sw_overlay_uploads,
-               (unsigned)s->sw_2d_raster_tasks);
+               (unsigned)s->sw_2d_raster_tasks,
+               (unsigned)s->fg_pass_count,
+               (unsigned)s->fg_batch_count,
+               (unsigned)s->fg_material_batches,
+               (unsigned)s->fg_gl_finish_count);
     }
+}
+
+static int verify_fg_framegraph(const lv_gpu_composite_verify_stats_t * s)
+{
+    if(!env_bool("LVGL_VERIFY_FG", 1)) return 1;
+
+    if(s->fg_gl_finish_count > 1) {
+        printf("LVGL_VERIFY: FAIL fg scenario=%d gl_finish_count=%u (expect <=1)\n",
+               scenario_id, (unsigned)s->fg_gl_finish_count);
+        return 0;
+    }
+
+    switch(scenario_id) {
+        case 1:
+            /* AR launcher: 3D pass + optional 2D overlay */
+            if(s->fg_pass_count < 1 || s->fg_pass_count > 3) {
+                printf("LVGL_VERIFY: FAIL fg scenario=1 pass_count=%u (expect 1..3)\n",
+                       (unsigned)s->fg_pass_count);
+                return 0;
+            }
+            if(s->gpu_3d_draws < 1) {
+                printf("LVGL_VERIFY: FAIL fg scenario=1 pure-3D component gpu_3d_draws=%u\n",
+                       (unsigned)s->gpu_3d_draws);
+                return 0;
+            }
+            break;
+        case 2:
+            /* NAV AR: mixed 3D + GPU 2D HUD */
+            if(s->fg_pass_count < 1 || s->fg_pass_count > 3) {
+                printf("LVGL_VERIFY: FAIL fg scenario=2 pass_count=%u (expect 1..3)\n",
+                       (unsigned)s->fg_pass_count);
+                return 0;
+            }
+            if(s->fg_batch_count < 1) {
+                printf("LVGL_VERIFY: FAIL fg scenario=2 batch_count=%u (expect >=1)\n",
+                       (unsigned)s->fg_batch_count);
+                return 0;
+            }
+            break;
+        case 3:
+            /* 3D stress + small HUD labels */
+            if(s->fg_pass_count < 1 || s->fg_pass_count > 3) {
+                printf("LVGL_VERIFY: FAIL fg scenario=3 pass_count=%u (expect 1..3)\n",
+                       (unsigned)s->fg_pass_count);
+                return 0;
+            }
+            if(s->gpu_3d_draws < s->gpu_2d_tasks) {
+                printf("LVGL_VERIFY: FAIL fg scenario=3 gpu_3d=%u < gpu_2d=%u (3D should dominate)\n",
+                       (unsigned)s->gpu_3d_draws, (unsigned)s->gpu_2d_tasks);
+                return 0;
+            }
+            break;
+        case 4:
+            if(s->fg_pass_count < 1 || s->fg_pass_count > 3) {
+                printf("LVGL_VERIFY: FAIL fg scenario=4 pass_count=%u (expect 1..3)\n",
+                       (unsigned)s->fg_pass_count);
+                return 0;
+            }
+            if(s->gpu_3d_draws < 1) {
+                printf("LVGL_VERIFY: FAIL fg scenario=4 gpu_3d_draws=%u (expect >=1 button mesh)\n",
+                       (unsigned)s->gpu_3d_draws);
+                return 0;
+            }
+            break;
+        default:
+            break;
+    }
+    return 1;
 }
 
 static int verify_gpu_path(const lv_gpu_composite_verify_stats_t * s)
@@ -162,6 +240,25 @@ static int verify_frame_content(int frame_idx, const lv_gpu_composite_verify_sta
         return 1;
     }
 
+    if(scenario_id == 4) {
+        if(s->last_flush_items < 1) {
+            printf("LVGL_VERIFY: FAIL scenario=%d frame=%d flush_items=%u (expect >=1 3D button)\n",
+                   scenario_id, frame_idx, (unsigned)s->last_flush_items);
+            return 0;
+        }
+        if(s->region_max_alpha < 32 && s->flush_max_alpha < 32) {
+            printf("LVGL_VERIFY: FAIL scenario=%d frame=%d max_alpha=%u (expect visible 3D button)\n",
+                   scenario_id, frame_idx, (unsigned)s->region_max_alpha);
+            return 0;
+        }
+        if(s->region_bluish_count < 4) {
+            printf("LVGL_VERIFY: FAIL scenario=%d frame=%d bluish=%u (expect blue button pixels)\n",
+                   scenario_id, frame_idx, (unsigned)s->region_bluish_count);
+            return 0;
+        }
+        return 1;
+    }
+
     printf("LVGL_VERIFY: FAIL scenario=%d frame=%d (unknown scenario)\n", scenario_id, frame_idx);
     return 0;
 }
@@ -198,7 +295,25 @@ static void verify_one_frame(lv_display_t * disp)
     if(stats.flush_serial == last_verified_serial) return;
     last_verified_serial = stats.flush_serial;
 
-    if(stats.corner_min_alpha > 10) {
+    if(frame_idx == 1 && getenv("LVGL_VERIFY_DUMP")) {
+        const char * dump_dir = getenv("LVGL_VERIFY_DUMP");
+        char frame_path[512];
+        lv_snprintf(frame_path, sizeof(frame_path), "%s/frame_lvgl.rgba", dump_dir);
+        if(lv_gpu_composite_dump_frame_lvgl(disp, frame_path)) {
+            printf("LVGL_VERIFY: dump frame -> %s\n", frame_path);
+        }
+#if LV_USE_SNAPSHOT
+        if(scenario_id == 1) {
+            char snap_path[512];
+            lv_snprintf(snap_path, sizeof(snap_path), "%s/snap1_lvgl.rgba", dump_dir);
+            if(lv_3d_plane_dump_snapshot_lvgl(1, snap_path)) {
+                printf("LVGL_VERIFY: dump snap1 -> %s\n", snap_path);
+            }
+        }
+#endif
+    }
+
+    if(stats.corner_min_alpha > 10 && scenario_id != 4) {
         printf("LVGL_VERIFY: FAIL scenario=%d frame=%d corner_min_alpha=%u (expect ~0 AR passthrough)\n",
                scenario_id, frame_idx, (unsigned)stats.corner_min_alpha);
         verify_done = 1;
@@ -215,6 +330,11 @@ static void verify_one_frame(lv_display_t * disp)
         exit(1);
     }
 
+    if(!verify_fg_framegraph(&stats)) {
+        verify_done = 1;
+        exit(1);
+    }
+
 #if LV_USE_3D_SEGMENT_POOL
     if(scenario_id == 2) {
         const float min_z = lvgl_scenario2_get_min_seg_z();
@@ -226,29 +346,28 @@ static void verify_one_frame(lv_display_t * disp)
     frames_checked++;
     verify_log_path_stats(&stats);
 
-#if LV_USE_SNAPSHOT
-    if(scenario_id == 1 && frame_idx == 1 && getenv("LVGL_VERIFY_DUMP")) {
-        const char * dump_dir = getenv("LVGL_VERIFY_DUMP");
-        char frame_path[512];
-        char snap_path[512];
-        lv_snprintf(frame_path, sizeof(frame_path), "%s/frame_lvgl.rgba", dump_dir);
-        lv_snprintf(snap_path, sizeof(snap_path), "%s/snap1_lvgl.rgba", dump_dir);
-        if(lv_gpu_composite_dump_frame_lvgl(disp, frame_path)) {
-            printf("LVGL_VERIFY: dump frame -> %s\n", frame_path);
-        }
-        if(lv_3d_plane_dump_snapshot_lvgl(1, snap_path)) {
-            printf("LVGL_VERIFY: dump snap1 -> %s\n", snap_path);
-        }
+    if(scenario_id == 4) {
+        printf("LVGL_VERIFY: frame %d/%d ok corner_a=%u max_a=%u flush_items=%u "
+               "bluish=%u center_rgba=%u,%u,%u,%u\n",
+               frame_idx, frames_to_check,
+               (unsigned)stats.corner_min_alpha,
+               (unsigned)stats.region_max_alpha,
+               (unsigned)stats.last_flush_items,
+               (unsigned)stats.region_bluish_count,
+               (unsigned)stats.center_rgba[0],
+               (unsigned)stats.center_rgba[1],
+               (unsigned)stats.center_rgba[2],
+               (unsigned)stats.center_rgba[3]);
     }
-#endif
-
-    printf("LVGL_VERIFY: frame %d/%d ok corner_a=%u max_a=%u flush_max=%u flush_items=%u visible=%u\n",
-           frame_idx, frames_to_check,
-           (unsigned)stats.corner_min_alpha,
-           (unsigned)stats.region_max_alpha,
-           (unsigned)stats.flush_max_alpha,
-           (unsigned)stats.last_flush_items,
-           (unsigned)stats.region_visible_count);
+    else {
+        printf("LVGL_VERIFY: frame %d/%d ok corner_a=%u max_a=%u flush_max=%u flush_items=%u visible=%u\n",
+               frame_idx, frames_to_check,
+               (unsigned)stats.corner_min_alpha,
+               (unsigned)stats.region_max_alpha,
+               (unsigned)stats.flush_max_alpha,
+               (unsigned)stats.last_flush_items,
+               (unsigned)stats.region_visible_count);
+    }
 
     if(frames_checked >= frames_to_check) {
 #if LV_USE_3D_SEGMENT_POOL
@@ -268,6 +387,14 @@ static void verify_one_frame(lv_display_t * disp)
                scenario_id, frames_to_check, frames_seen, (unsigned)stats.region_samples);
         if(env_bool("LVGL_VERIFY_GPU_PATH", scenario_id == 2 ? 1 : 0)) {
             printf("LVGL_VERIFY: gpu_path PASS scenario=%d\n", scenario_id);
+        }
+        if(env_bool("LVGL_VERIFY_FG", 1)) {
+            printf("LVGL_VERIFY: fg PASS scenario=%d pass=%u batch=%u mat=%u gl_finish=%u\n",
+                   scenario_id,
+                   (unsigned)stats.fg_pass_count,
+                   (unsigned)stats.fg_batch_count,
+                   (unsigned)stats.fg_material_batches,
+                   (unsigned)stats.fg_gl_finish_count);
         }
         verify_done = 1;
         exit(0);

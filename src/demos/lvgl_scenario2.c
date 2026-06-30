@@ -5,6 +5,10 @@
 #include "lvgl/lvgl.h"
 #include "lvgl_demos.h"
 
+#if LV_USE_DRAW_GPU_COMPOSITE
+#include "draw/gpu_composite/lv_draw_gpu_composite.h"
+#endif
+
 #if LV_USE_3D && LV_USE_3D_WIDGETS && LV_USE_3D_SEGMENT_POOL
 
 #include <stdlib.h>
@@ -156,6 +160,9 @@ static void nav_hud_create(lv_obj_t * scr)
 
 void lvgl_scenario2_skyline_create(void)
 {
+#if LV_USE_DRAW_GPU_COMPOSITE
+    lv_gpu_composite_set_ui_mode(LV_GPU_COMPOSITE_UI_NAV_AR);
+#endif
     lv_obj_t * scr = lv_screen_active();
     lv_obj_set_style_bg_opa(scr, LV_OPA_0, 0);
     lv_obj_remove_flag(scr, LV_OBJ_FLAG_SCROLLABLE);

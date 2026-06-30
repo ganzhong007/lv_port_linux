@@ -12,6 +12,7 @@ extern "C" {
 void lvgl_scenario1_launcher_create(void);
 void lvgl_scenario2_skyline_create(void);
 void lvgl_scenario3_gpu_stress_create(void);
+void lvgl_scenario4_3dbutton_create(void);
 
 /** Active wireframe mesh count (scenario 3 verify). */
 int lvgl_scenario3_get_mesh_count(void);
