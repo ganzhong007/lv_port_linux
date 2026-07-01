@@ -3,7 +3,7 @@ name: LVGL 2D3D混合渲染后端
 overview: LVGL（基于 LVGL 扩展）面向智能眼镜 1080p AR 的 2D/3D 混合低功耗渲染后端。典型验收场景：场景一 9 宫格穿透启动器、场景二 导航车道楼群透视。设计以场景驱动验证并迭代（§0.6）。
 todos:
   - id: conf-guard
-    content: 新增 LV_USE_GPU_COMPOSITE / LV_USE_3D / LV_USE_DRAW_GPU_COMPOSITE 配置项，与 LV_USE_DRAW_OPENGLES 互斥，lv_init 注册
+    content: 新增 LV_USE_GPU_RENDERER / LV_USE_3D / LV_USE_DRAW_GPU_RENDERER 配置项，与 LV_USE_DRAW_OPENGLES 互斥，lv_init 注册
     status: pending
   - id: scene-core
     content: 新增 lvgl/src/3d/ 场景核心：transform、mesh 资源、scene node、camera，以及与 lv_obj 树的双向绑定
@@ -27,10 +27,10 @@ todos:
     content: Phase 2～3：Unity Static Batching + Frustum Cull + OnDemandRendering 映射到 3D material batch / scene cull / adaptive refresh
     status: pending
   - id: gles-caps-layer
-    content: 新增 lv_gpu_composite_caps 能力探测与 [GL2/GL3/EXT/HW/CPU] 特性标记层；Mali-400 基座 + resolve_path 多候选路径
+    content: 新增 lv_gpu_renderer_caps 能力探测与 [GL2/GL3/EXT/HW/CPU] 特性标记层；Mali-400 基座 + resolve_path 多候选路径
     status: pending
   - id: hw-caps-vendor
-    content: 新增 lv_gpu_composite_caps_probe_vendor() 板级 hook + hw_features 位域；自研硬件可覆盖 GL3/CPU 降级路径
+    content: 新增 lv_gpu_renderer_caps_probe_vendor() 板级 hook + hw_features 位域；自研硬件可覆盖 GL3/CPU 降级路径
     status: pending
   - id: gles2-shader-port
     content: 为 compositor/3D/2D 提供 GLSL ES 1.00 着色器变体，替代当前 #version 300 es 硬依赖
@@ -39,7 +39,7 @@ todos:
     content: 扩展/替换 LV_DRAW_TASK_TYPE_3D 为 mesh/scene draw descriptor（mesh_id + mvp + material），废弃 tex_id 主路径
     status: pending
   - id: draw-unit-skeleton
-    content: 创建 lvgl/src/draw/gpu_composite/ draw unit 骨架（evaluate/dispatch/delete）
+    content: 创建 lvgl/src/draw/gpu_renderer/ draw unit 骨架（evaluate/dispatch/delete）
     status: pending
   - id: buffer-565a8
     content: RGB565+A8 双平面 Display FBO（color+alpha8）、shader 分拆写入、caps 降级、NEAR_FULL 验收档
@@ -48,7 +48,7 @@ todos:
     content: ES2 compositor：RGBA8 AR 穿透、帧图 pass、plane_bake、3D batch+alpha sort、2D OVERLAY batch
     status: pending
   - id: display-driver
-    content: 新增 lv_gpu_composite_display 驱动（EGL + GLFW 适配）
+    content: 新增 lv_gpu_renderer_display 驱动（EGL + GLFW 适配）
     status: pending
   - id: glyph-layer-phase2
     content: Phase 2：LABEL glyph atlas + LAYER 混合
@@ -82,7 +82,7 @@ isProject: false
 
 # LVGL 2D/3D 混合低功耗渲染后端改造方案（修订版）
 
-> **LVGL**：本方案指在 LVGL 上扩展的 **2D/3D 混合渲染后端**（`lv_draw_gpu_composite` + 3D 子系统）。下文「LVGL 后端」= 本设计整体；API 前缀仍沿用 `lv_` 以兼容 LVGL 生态。
+> **LVGL**：本方案指在 LVGL 上扩展的 **2D/3D 混合渲染后端**（`lv_draw_gpu_renderer` + 3D 子系统）。下文「LVGL 后端」= 本设计整体；API 前缀仍沿用 `lv_` 以兼容 LVGL 生态。
 
 ## 0. 产品目标：智能眼镜彩色 1080p AR
 
@@ -271,7 +271,7 @@ void lv_3d_segment_pool_tick(lv_3d_segment_pool_t * pool, float dt);
 | G9 材质枚举 | 线框/透明/示意贴图 | `lv_3d_material.c` 过简 | §5 **`lv_3d_material_t` 扩展**（见下） |
 | G10 静态功耗 | 场景一 idle 几乎不耗 GPU | Retainer 推到 Phase 3 过晚 | Phase 2 **最小快照 bake**；Phase 3 完整 Retainer + **event-driven 0fps** |
 | G11 空间模式切换 | 场景一 Grid → App 全屏 | Canvas 三模式未绑场景 | §2.7 **`lv_ui_mode_t` 场景状态机** |
-| G12 验收脚本 | 可回归 | 无场景级测试 | §0.7 + `verify_scenario*.sh` todo |
+| G12 验收脚本 | 可回归 | 无场景级测试 | §0.7 + **§14**（`verify_scenario*.sh` + LVGL 单元测试） |
 
 **扩展 `lv_3d_material_t`（场景二 + 场景一边框）**：
 
@@ -311,7 +311,7 @@ typedef enum {
 
 #### 0.7.1 像素格式分档验收
 
-| 档位 | `LV_GPU_COMPOSITE_COLOR_FORMAT` | 必须通过项 | 可降级项 |
+| 档位 | `LV_GPU_RENDERER_COLOR_FORMAT` | 必须通过项 | 可降级项 |
 |------|--------------------------------|-----------|---------|
 | **FULL** | RGBA8888 | §0.7 全部 | — |
 | **NEAR_FULL** | **RGB565+A8** | 穿透、淡出、半透明线框、pick、parallax | 565 **色带**可目视接受；driver 出口 8888 转换可接受 |
@@ -326,7 +326,7 @@ typedef enum {
 
 **修订后正确定位**：
 1. **路径 A**：为现有每个 `lv_obj` 增加可选 **3D 属性**（Transform / RenderMode），使 2D widget 可嵌入 3D 空间渲染。
-2. **路径 B**：新增 **原生 3D widget 体系**（参考 Unity3D / OSG 最基础概念），由 **`lv_draw_gpu_composite` 后端内部** 完成 mesh 绘制与合成。
+2. **路径 B**：新增 **原生 3D widget 体系**（参考 Unity3D / OSG 最基础概念），由 **`lv_draw_gpu_renderer` 后端内部** 完成 mesh 绘制与合成。
 
 `lv_3dtexture` / 外部 `tex_id` 仅保留为 **兼容层（deprecated）**，不再是主设计。
 
@@ -369,7 +369,7 @@ flowchart TB
         Collect3D["遍历 scene\n生成 3D draw items"]
     end
 
-    subgraph backend [lv_draw_gpu_composite]
+    subgraph backend [lv_draw_gpu_renderer]
         Comp["单 display FBO compositor"]
         Batch2D["2D batch"]
         Batch3D["3D mesh batch\ndepth + blend"]
@@ -430,7 +430,7 @@ flowchart TB
     subgraph lvgl_target [LVGL 目标映射]
         LObj["lv_obj + 3D 属性\n+ 3D widgets"]
         DrawTask["draw task + layer"]
-        Comp["lv_draw_gpu_composite"]
+        Comp["lv_draw_gpu_renderer"]
     end
     UMG --> Slate --> RHI
     LObj --> DrawTask --> Comp
@@ -568,7 +568,7 @@ flowchart TB
         Mode["2D 层 / 3D 属性 / lv_3dviewport"]
         Mesh["lv_3dmesh + material"]
         LCam["lv_3dcamera"]
-        Comp["lv_draw_gpu_composite"]
+        Comp["lv_draw_gpu_renderer"]
     end
     GO --> Trans
     Trans --> Canvas
@@ -752,13 +752,13 @@ flowchart TD
 
 | # | 设计修改 | 原因 |
 |---|---------|------|
-| 1 | 新增 **`lv_gpu_composite_caps_t` 能力探测层**（启动时读 GL 版本 + extension） | 同一套代码适配 Mali-400 与新 Mali |
+| 1 | 新增 **`lv_gpu_renderer_caps_t` 能力探测层**（启动时读 GL 版本 + extension） | 同一套代码适配 Mali-400 与新 Mali |
 | 2 | **渲染 API 双轨**：`gles2`（Mali-400 主路径）与 `gles3`（可选）分离为独立 `.c` + shader 集 | 避免 `#ifdef` 散落 |
 | 3 | **特性标记语法**：设计/代码中每条 GPU 能力带 `[GL2]` `[GL3]` `[EXT:xxx]` `[HW:xxx]` `[CPU]` 标签 | 标准 GLES + 自研硬件 + CPU 降级统一描述 |
 | 4 | **VAO 抽象层**：ES3 用 VAO；ES2 用手动 attrib 或 `OES_vertex_array_object` | Mali-400 无 GLES3 核心 VAO |
 | 5 | **Shader 规范**：ES2 禁用 `bool` uniform、`layout(location=)`、`in/out`；提供 ES 1.00 变体 | 对齐 [`lv_opengles_driver.c`](lvgl/src/drivers/glfw/lv_opengles_driver.c) 现有 GLES3 写法 |
 | 6 | **Phase 功能分级**：Instancing/UBO/MRT 等标 `[GL3]` 或 `[CPU-fallback]` | Unity batch 在 Mali-400 上 CPU 合批 |
-| 7 | **配置项**：`LV_GPU_COMPOSITE_GLES_API = 2 | 3 | AUTO` | 量产板可强制 ES2 |
+| 7 | **配置项**：`LV_GPU_RENDERER_GLES_API = 2 | 3 | AUTO` | 量产板可强制 ES2 |
 | 8 | **evaluate 降级**：`[GL3-only]` 的 2D 特效 task 回落 SW draw unit | 功能不丢、路径可降级 |
 | 9 | **测试矩阵**：smoke 增加 **GLES2 context** profile | 防止开发机 ES3 掩盖嵌入式问题 |
 | 10 | **板级 vendor hook**：`caps_probe_vendor()` + `hw_features` 位域 + 可选 `gles_hw.c` | 自研 IP 叠加在 Mali-400 基座上，不 fork LVGL |
@@ -792,7 +792,7 @@ flowchart TD
 | **渐进启用** | 新硬件 IP 可先 stub（flag=0 走降级），驱动就绪后开 flag 即生效 |
 | **测试可复现** | smoke 可 mock `hw_features` 位，在 x86 开发机上验证 `[HW]` 路径逻辑 |
 
-运行时结构（计划新增 [`lv_gpu_composite_caps.h`](lvgl/src/draw/gpu_composite/lv_gpu_composite_caps.h)）：
+运行时结构（计划新增 [`lv_gpu_renderer_caps.h`](lvgl/src/draw/gpu_renderer/lv_gpu_renderer_caps.h)）：
 
 ```c
 /* 标准 GL 能力 */
@@ -813,9 +813,9 @@ typedef struct {
 
     /* 自研硬件能力位域 — 由板级 vendor 填充，LVGL 核心只读 */
     uint64_t hw_features;             /* LV_GPU_HW_* 宏组合 */
-} lv_gpu_composite_caps_t;
+} lv_gpu_renderer_caps_t;
 
-/* 自研能力示例（板级头文件 lv_gpu_composite_caps_vendor.h 定义具体 bit） */
+/* 自研能力示例（板级头文件 lv_gpu_renderer_caps_vendor.h 定义具体 bit） */
 #define LV_GPU_HW_BLIT2D          (1ULL << 0)  /* 硬件 2D blit/compose */
 #define LV_GPU_HW_INSTANCED_DRAW  (1ULL << 1)  /* 覆盖 [GL3] instancing 降级 */
 #define LV_GPU_HW_DEPTH24         (1ULL << 2)  /* 硬件 depth24，覆盖 DEPTH16 */
@@ -824,13 +824,13 @@ typedef struct {
 #define LV_GPU_HW_565_A8          (1ULL << 5)  /* RGB565+A8 单 pass / 送显 */
 /* … 后续 IP 继续追加 bit，不改 caps 结构体布局 */
 
-void lv_gpu_composite_caps_probe(lv_gpu_composite_caps_t * caps);
+void lv_gpu_renderer_caps_probe(lv_gpu_renderer_caps_t * caps);
 /* 板级实现：读 MMIO / 专用 ioctl / 厂商 GL extension 字符串，写入 hw_features */
-void lv_gpu_composite_caps_probe_vendor(lv_gpu_composite_caps_t * caps);
+void lv_gpu_renderer_caps_probe_vendor(lv_gpu_renderer_caps_t * caps);
 
 /* feature_flag 可同时查 GL 标准位与 LV_GPU_HW_* */
-bool lv_gpu_composite_caps_has(const lv_gpu_composite_caps_t * caps, uint32_t feature_flag);
-bool lv_gpu_composite_caps_resolve_path(const lv_gpu_composite_caps_t * caps,
+bool lv_gpu_renderer_caps_has(const lv_gpu_renderer_caps_t * caps, uint32_t feature_flag);
+bool lv_gpu_renderer_caps_resolve_path(const lv_gpu_renderer_caps_t * caps,
                                         const uint32_t * candidates, uint32_t count,
                                         uint32_t * out_chosen);
 ```
@@ -895,7 +895,7 @@ bool lv_gpu_composite_caps_resolve_path(const lv_gpu_composite_caps_t * caps,
 
 ```mermaid
 flowchart TB
-    Init["lv_gpu_composite_init()"]
+    Init["lv_gpu_renderer_init()"]
     ProbeGL["caps_probe\nGL_VERSION + extensions"]
     ProbeHW["caps_probe_vendor\nMMIO / ioctl / 厂商 ext"]
     Merge["合并 caps\nhw_features + gles_major"]
@@ -914,18 +914,18 @@ flowchart TB
 **新增文件**：
 
 ```
-lvgl/src/draw/gpu_composite/
-  lv_gpu_composite_caps.h/c           # 标准 GL 探测 + resolve_path
-  lv_gpu_composite_caps_vendor.h      # LV_GPU_HW_* 位定义（板级可 override）
-  lv_gpu_composite_gles2.c            # [GL2] Mali-400 基线，永远保留
-  lv_gpu_composite_gles3.c            # [GL3] 新 Mali 可选
-  lv_gpu_composite_gles_hw.c          # [HW] 自研 IP 路径（弱符号 / 板级链接）
-  lv_gpu_composite_shader_es2.c       # GLSL 1.00 源码
-  lv_gpu_composite_shader_es3.c       # GLSL 3.00 源码
-  lv_gpu_composite_vao.h/c            # VAO 抽象（manual / OES / core）
+lvgl/src/draw/gpu_renderer/
+  lv_gpu_renderer_caps.h/c           # 标准 GL 探测 + resolve_path
+  lv_gpu_renderer_caps_vendor.h      # LV_GPU_HW_* 位定义（板级可 override）
+  lv_gpu_renderer_gles2.c            # [GL2] Mali-400 基线，永远保留
+  lv_gpu_renderer_gles3.c            # [GL3] 新 Mali 可选
+  lv_gpu_renderer_gles_hw.c          # [HW] 自研 IP 路径（弱符号 / 板级链接）
+  lv_gpu_renderer_shader_es2.c       # GLSL 1.00 源码
+  lv_gpu_renderer_shader_es3.c       # GLSL 3.00 源码
+  lv_gpu_renderer_vao.h/c            # VAO 抽象（manual / OES / core）
 
 lvgl/src/drivers/<board>/             # 板级目录（示例）
-  lv_gpu_composite_caps_vendor.c      # 实现 caps_probe_vendor()
+  lv_gpu_renderer_caps_vendor.c      # 实现 caps_probe_vendor()
 ```
 
 **`gles_hw.c` 链接策略**：LVGL 核心提供空 stub（所有 `[HW]` 路径 fallthrough）；量产板卡链接板级实现覆盖 stub，**不改 LVGL 上游源码**。
@@ -940,11 +940,11 @@ lvgl/src/drivers/<board>/             # 板级目录（示例）
 ### 2.8.5 配置项修订（§8 合并）
 
 ```c
-#define LV_GPU_COMPOSITE_GLES_API     2    /* 2=Mali-400 强制, 3=新 GPU, 0=AUTO */
-#define LV_GPU_COMPOSITE_LOG_CAPS     1    /* 启动打印 caps 表 */
-#define LV_GPU_COMPOSITE_DEPTH_BITS   16   /* Mali-400: 16；新 GPU: 24 */
-#define LV_GPU_COMPOSITE_USE_ETC1       1    /* Mali 优先压缩格式 [GL2] */
-#define LV_GPU_COMPOSITE_ALLOW_GLES3    0    /* 量产 Mali-400 板卡设为 0 */
+#define LV_GPU_RENDERER_GLES_API     2    /* 2=Mali-400 强制, 3=新 GPU, 0=AUTO */
+#define LV_GPU_RENDERER_LOG_CAPS     1    /* 启动打印 caps 表 */
+#define LV_GPU_RENDERER_DEPTH_BITS   16   /* Mali-400: 16；新 GPU: 24 */
+#define LV_GPU_RENDERER_USE_ETC1       1    /* Mali 优先压缩格式 [GL2] */
+#define LV_GPU_RENDERER_ALLOW_GLES3    0    /* 量产 Mali-400 板卡设为 0 */
 ```
 
 ### 2.8.6 对现有仓库的直接影响
@@ -952,7 +952,7 @@ lvgl/src/drivers/<board>/             # 板级目录（示例）
 | 文件 | 现状 | 设计动作 |
 |------|------|---------|
 | [`building_renderer.c`](building_renderer.c) | GLES3 + VAO | 标记 Legacy；demo 迁移到 `lv_3dmesh` 后删除 |
-| [`lv_opengles_driver.c`](lvgl/src/drivers/glfw/lv_opengles_driver.c) | GLES3 | 新后端 **`lv_gpu_composite_*`** 替代；旧驱动保留 legacy |
+| [`lv_opengles_driver.c`](lvgl/src/drivers/glfw/lv_opengles_driver.c) | GLES3 | 新后端 **`lv_gpu_renderer_*`** 替代；旧驱动保留 legacy |
 | [`gltf_loader.c`](gltf_loader.c) | GLES3 shader | `lv_3dmodel` Phase 2 需 **ES2 shader 变体** 或 SW 预处理 |
 
 ### 2.8.7 Phase 修订（与能力标记对齐）
@@ -1038,7 +1038,7 @@ lv_3d_snapshot_id_t lv_3d_plane_bake(lv_obj_t * obj, lv_3d_plane_src_t src);
 void lv_3d_plane_invalidate(lv_obj_t * obj);  /* app 前台更新缩略图 */
 ```
 
-- bake 在 **`lv_draw_gpu_composite` dispatch** 内完成，与 3D pass 共享 GL 上下文
+- bake 在 **`lv_draw_gpu_renderer` dispatch** 内完成，与 3D pass 共享 GL 上下文
 - **Phase 2**：单 tile bake + 9 路 SNAPSHOT；**Phase 3**：Retainer 合并多 tile 脏区调度（G10）
 - OS **应用管理器**负责切换前台 app；LVGL 只接收「哪个 `lv_obj` 子树作为 tile 源」
 
@@ -1303,7 +1303,7 @@ sequenceDiagram
     participant Obj as lv_obj / 3D widgets
     participant Scene as lv_3d_scene_collect
     participant Draw as lv_draw_3d
-    participant Unit as lv_draw_gpu_composite
+    participant Unit as lv_draw_gpu_renderer
     participant GPU as Mali GLES2
 
     Obj->>Scene: refresh 遍历
@@ -1323,7 +1323,7 @@ sequenceDiagram
 
 ---
 
-## 7. `lv_draw_gpu_composite` 后端（Compositor）
+## 7. `lv_draw_gpu_renderer` 后端（Compositor）
 
 ### 7.1 与初版相同的部分
 
@@ -1336,8 +1336,8 @@ sequenceDiagram
 
 ```c
 /* compositor 内 */
-void lv_gpu_composite_draw_mesh(const lv_draw_3d_dsc_t * dsc);
-void lv_gpu_composite_draw_viewport_pass(const lv_draw_3d_dsc_t * dsc);
+void lv_gpu_renderer_draw_mesh(const lv_draw_3d_dsc_t * dsc);
+void lv_gpu_renderer_draw_viewport_pass(const lv_draw_3d_dsc_t * dsc);
 ```
 
 **Viewport pass 流程**：
@@ -1362,7 +1362,7 @@ void lv_gpu_composite_draw_viewport_pass(const lv_draw_3d_dsc_t * dsc);
 | 2D FILL/IMAGE | shader 输出 `gl_FragColor.a`；与 obj/style opa 相乘 |
 | 3D mesh 材质 | `lv_3d_material_t.opa` + `blend_mode`；线框可 **仅描边 alpha=1、面 alpha=0** |
 | 全屏 opaque 应用 | 场景一 **AppFullscreen** 态可局部 opaque；GridIdle 态尽量透明底 |
-| OS 交接 | display driver 暴露 **带 alpha 的 buffer** 给 EGL/光机合成；见 `lv_gpu_composite_display` |
+| OS 交接 | display driver 暴露 **带 alpha 的 buffer** 给 EGL/光机合成；见 `lv_gpu_renderer_display` |
 
 **场景一/二共用**：任何「未覆盖像素」必须保持 alpha=0，否则破坏 AR 穿透。
 
@@ -1389,26 +1389,117 @@ flowchart TB
 
 ### 7.7 通用合批算法（Framegraph）
 
-**目标**：任意 LVGL 应用产出标准 DrawTask（含 3D）时，`lv_draw_gpu_composite` 自动 **正确合成 + 能效择优**，不再写死三个 demo 场景。
+> 完整设计来源：Cursor Plan `2d3d_adaptive_batching`（2026-06）；实现状态见 §7.7.8。
 
-**四层流水线**：
+**目标**：任意 LVGL 应用产出标准 DrawTask（含 3D）时，`lv_draw_gpu_renderer` 自动 **正确合成 + 能效择优**，不再写死三个 demo 场景。
+
+#### 7.7.1 现状与缺口（改造前）
+
+| 改造前局限 | 说明 |
+|-----------|------|
+| 3D 仅 `VIEWPORT_PASS` 入队 | 无通用 mesh pass、无 material batch |
+| `gpu2d_can_claim()` 硬编码 | 大量 task 落回 SW + 全屏 `overlay_2d_fb` |
+| `evaluate` 一律 `score=0` | 不与 SW 做代价比较 |
+| flush 固定 **3D → 2D → SW** | 无动态 pass 划分 |
+| `framegraph` | 仅在 PLAN §7.5 描述，**未落地**（现已实现） |
+
+#### 7.7.2 设计原则
+
+1. **正确性由硬约束保证，能效由软评分优化**（不可为 batch 破坏 layer 依赖或 AR 穿透）。
+2. **两阶段分离**（对齐 VG-Lite）：
+   - **Record**：dispatch 只分类、入队、标 FINISHED
+   - **Execute**：`flush_cb` 按帧图一次性执行 + 帧末 `glFinish`
+3. **Pass 顺序可参数化**，默认模板覆盖 AR 场景，但不写死为仅 3 个 scenario。
+
+#### 7.7.3 四层流水线
+
+```mermaid
+flowchart TB
+    subgraph record [Record - lv_refr]
+        Tasks["layer 上全部 DrawTask"]
+        Classify["Task 分类 + 元数据"]
+        Eval["路径 evaluate 评分"]
+        Enqueue["写入 FramegraphBuilder"]
+        Tasks --> Classify --> Eval --> Enqueue
+    end
+
+    subgraph build [Build - flush 前]
+        FG["lv_gpu_renderer_framegraph_build"]
+        Topo["拓扑排序 + 硬约束"]
+        Merge["合批合并"]
+        FG --> Topo --> Merge
+    end
+
+    subgraph exec [Execute - flush]
+        P0["Pass: Clear/Load"]
+        P3D["Pass: 3D viewports"]
+        P2D["Pass: 2D GPU batch"]
+        Psw["Pass: SW fallback / LAYER"]
+        P0 --> P3D --> P2D --> Psw
+    end
+
+    Enqueue --> FG
+    Merge --> exec
+```
 
 | 阶段 | 时机 | 模块 | 职责 |
 |------|------|------|------|
-| Record | `lv_refr` dispatch | `lv_gpu_composite_framegraph.c` | 分类 task、`evaluate` 代价分、入队 |
+| Record | `lv_refr` dispatch | `lv_gpu_renderer_framegraph.c` | 分类 task、`evaluate` 代价分、入队 |
 | Build | `draw_buf_flush` 前 | 同上 | 硬约束排序、shader/material 合批 |
 | Execute | flush | `fg_execute` → GLES2 2D/3D | Clear → 3D → 2D OVERLAY → SW residual |
 | Finish | 帧末 | `glFinish` ×1 | 对齐 VG-Lite `lv_vg_lite_finish` |
 
-**路径择优**（`preference_score` 1..99，低于 SW 的 100 才认领）：
+#### 7.7.4 Task 分类（`lv_gpu_fg_node_t`）
 
-| 路径 | 条件 | 示意分 |
-|------|------|--------|
+| 字段 | 来源 | 用途 |
+|------|------|------|
+| `space` | obj 3D 属性 / `lv_ui_space` / 是否在 `lv_3dviewport` 内 | 决定 pass |
+| `kind` | `LV_DRAW_TASK_TYPE_*` / `LV_3D_DRAW_KIND_*` | 执行器选择 |
+| `target` | `target_layer`、是否 display FBO | FBO 切换 |
+| `z_key` | obj 树序、layer 序、3D 深度 | 排序 |
+| `blend` | opa、blend_mode、是否透明 | 能否合批 |
+| `shader_key` | fill/tex/3d_mat id | 合批桶 |
+| `clip` | `clip_area` | scissor 桶 |
+| `deps` | LAYER 子层、区域重叠（`is_independent`） | 硬约束 |
+
+**Space 枚举**（与 §2.7 对齐）：
+
+```c
+typedef enum {
+    LV_GPU_FG_SCREEN,       /* 普通全屏 2D */
+    LV_GPU_FG_OVERLAY,      /* 屏幕最上层 HUD */
+    LV_GPU_FG_VIEWPORT_3D,  /* 3D viewport pass */
+    LV_GPU_FG_PLANE_3D,     /* plane_bake quad，在 3D pass 内 */
+    LV_GPU_FG_LAYER,        /* 离屏子层回贴 */
+    LV_GPU_FG_FULLSCREEN_APP,
+} lv_gpu_fg_space_t;
+```
+
+#### 7.7.5 路径择优 evaluate
+
+对每个 task 计算路径候选及 **代价分**（越低越好；SW 固定 `preference_score=100`，GPU 仅 1～99 才认领）：
+
+| 路径 | 适用 | 示意分 / 代价 |
+|------|------|----------------|
 | `GPU_3D` | `LV_3D_DRAW_KIND_VIEWPORT_PASS` | 10 |
 | `GPU_NATIVE_2D` | display FB、无旋转/渐变 | 20 |
-| SW / raster | 其余 | 不认领（SW=100） |
+| `GPU_RASTER_SW` | 复杂 label/渐变（gles2_2d 内 SW→tex） | 10 + pixel_area |
+| `SW_DIRECT` | canvas / 离屏 layer | 5 + pixel_area |
+| `DEFER_LAYER` | `LV_DRAW_TASK_TYPE_LAYER` | 必须等子层完成 |
 
-**Pass 模板**（`lv_gpu_ui_mode_t` 裁剪，非写死 scenario）：
+- **batch_affinity**：与当前 open batch 同 `shader_key`、同 FBO、clip 可合并 → cost 减免
+- **能力降级**：`[HW] → [GL3] → [EXT] → [GL2] → [CPU]`（`lv_gpu_renderer_caps_t`）
+
+#### 7.7.6 硬约束与 Pass 模板
+
+**依赖**：`LAYER` BLOCKED 至子 layer FINISHED；`!is_independent` 重叠区保持原序。
+
+**AR / 混合**：
+- AR 区域首 pass：`glClearColor(0,0,0,0)`（`LV_GPU_RENDERER_AR_PASSTHROUGH`）
+- 3D 透明 mesh：opaque 先画 → transparent 按 view_depth 升序
+- `OVERLAY` 默认在 `VIEWPORT_3D` 之后；`PLANE_3D` 禁止再进 2D pass（防双绘）
+
+**默认模板**：
 
 ```
 Clear(α=0) → 3D viewports → 2D OVERLAY batch → SW residual overlay
@@ -1421,22 +1512,92 @@ Clear(α=0) → 3D viewports → 2D OVERLAY batch → SW residual overlay
 | `APP_FULLSCREEN` | 关 | 关 | 开 |
 | `GENERIC` | 由 task 推导 | 由 task 推导 | 由 task 推导 |
 
-**合批与延迟提交**：
+#### 7.7.7 合批与延迟提交
 
-- 2D：按 `prog_fill` / `prog_tex` shader 桶计数（`lv_gpu_composite_gles2_2d_count_shader_batches`）
-- 3D：`lv_gpu_composite_batch_3d.c` 统计同 material 连续段（painter 透明排序不变）
-- `LV_GPU_COMPOSITE_FLUSH_MAX_BATCHES`（默认 8）：每 N 个 batch `glFlush`；帧末单次 `glFinish`
+**合批桶**（同一 pass 内相邻且兼容的 node）：
 
-**验收表**（`LVGL_VERIFY` + `LVGL_VERIFY_FG=1`）：
+- 同一 `target` FBO / `shader_key` / 兼容 blend
+- scissor 相等或可安全扩大包围盒
+- 无 LAYER 依赖跨桶
+
+**2D**：按 `prog_fill` / `prog_tex` shader 桶（`lv_gpu_renderer_gles2_2d_count_shader_batches`）
+
+**3D**：`lv_gpu_renderer_batch_3d.c` — opaque 同 material 合并；transparent 先 sort 再按 material 分段
+
+**延迟提交**（借鉴 VG-Lite）：
+
+```c
+#define LV_GPU_RENDERER_FLUSH_MAX_BATCHES  8   /* 类比 LV_VG_LITE_FLUSH_MAX_COUNT */
+```
+
+- Record 阶段不 `glFinish`
+- 每 N 个 batch `glFlush`；**帧末** `glFinish` ×1
+- 静态 scene + 无 dirty → 跳过 3D collect
+
+**能效示意**：
+
+```
+energy_cost = w1*draw_calls + w2*fbo_switches + w3*sw_upload_bytes
+            + w4*glFinish_count + w5*fullscreen_overdraw_pixels
+```
+
+#### 7.7.8 实施分期与验收
+
+| 阶段 | 内容 | 状态 |
+|------|------|------|
+| **Phase A** | framegraph 分类 + 硬约束 + AR 模板；evaluate 与 SW 竞争 | 已落地 |
+| **Phase B** | `batch_3d` material merge；`FLUSH_MAX_BATCHES`；静态 scene 跳过 | 已落地 |
+| **Phase C** | `GENERIC` 自动推导 pass；`energy_cost` 调参；`[HW:TILE_COMPOSITOR]` | 部分 / 后续 |
+
+**验收表**（`LVGL_VERIFY` + `LVGL_VERIFY_FG=1`，§14）：
 
 | 测试 | 正确性 | 能效 |
 |------|--------|------|
 | 场景一 AR 9 宫格 | corner α≈0、tile 可见 | `fg_gl_finish_count ≤ 1` |
 | 场景二 NAV 混合 | HUD gpu2d、无 sw_overlay | `fg_batch_count ≥ 1` |
 | 场景三 3D stress + HUD | 线框可见、gpu3d 主导 | `fg_gl_finish_count ≤ 1` |
-| 嵌套 LAYER + 3D | 子层顺序（后续扩展） | 无多余全屏 upload |
+| 场景四 3D button | 蓝色按钮可见 | `gpu_3d_draws ≥ 1` |
+| 纯 2D 全屏 App | 与 SW 像素一致 | `glFinish_count ≤ 1` |
+| 嵌套 LAYER + 3D | 子层顺序正确 | 无多余全屏 upload |
 
-**相关源文件**：`lv_gpu_composite_framegraph.c/.h`、`lv_gpu_composite_batch_3d.c`、`lv_draw_gpu_composite.c`（evaluate/dispatch/flush 委托 framegraph）。
+#### 7.7.9 与 VG-Lite 对照
+
+| VG-Lite | gpu_renderer 对应 |
+|---------|-------------------|
+| `vg_lite_draw` 录 CMDBUF | `fg_record` + batch 队列 |
+| `lv_vg_lite_flush` 满 N task 才 submit | `FLUSH_MAX_BATCHES` + 帧末 finish |
+| `lv_vg_lite_finish` layer 结束 | framegraph execute 结束 |
+| evaluate 不支持则 sw | 代价模型择优 sw/gpu |
+
+#### 7.7.10 相关源文件
+
+| 文件 | 职责 |
+|------|------|
+| `lv_gpu_renderer_framegraph.c/.h` | 帧图 record / build / execute |
+| `lv_gpu_renderer_batch_3d.c/.h` | 3D material batch 统计 |
+| `lv_draw_gpu_renderer.c` | evaluate / dispatch / flush 委托 framegraph |
+| `lv_gpu_renderer_gles2_2d.c` | 2D shader 桶 batch |
+| `lv_gpu_renderer_gles2_3d.c` | viewport pass + AR clear |
+| `lv_gpu_renderer_caps.c/.h` | feature → path 映射 |
+
+**调度集成**（不改 `lv_refr` 遍历）：
+
+```mermaid
+sequenceDiagram
+    participant Refr as lv_refr
+    participant SW as sw unit
+    participant GR as gpu_renderer
+    participant FG as framegraph
+    participant GPU as GLES
+
+    Refr->>GR: evaluate/dispatch 2D/3D tasks
+    GR->>FG: record nodes
+    Refr->>SW: 未认领 tasks 立即执行
+    Refr->>GR: draw_buf_flush
+    GR->>FG: build + merge batches
+    FG->>GPU: execute passes
+    GR->>GPU: overlay residual SW fb
+```
 
 ### 7.6 像素格式：RGBA8888 / RGBA5551 / RGB565 等（修订）
 
@@ -1511,8 +1672,8 @@ flowchart LR
 **LVGL 模块**（新增）：
 
 ```
-lv_gpu_composite_buffer_565a8.c   # 双平面 alloc / clear / resolve
-lv_gpu_composite_shader_es2.c     # 变体：WRITE_RGB565 / WRITE_A8 / COMPOSITE_OUT
+lv_gpu_renderer_buffer_565a8.c   # 双平面 alloc / clear / resolve
+lv_gpu_renderer_shader_es2.c     # 变体：WRITE_RGB565 / WRITE_A8 / COMPOSITE_OUT
 ```
 
 **caps**：
@@ -1540,7 +1701,7 @@ bool has_hw_565_a8;            /* [HW:565_A8] 单 pass 写入 */
 
 - α 有 **16 级**，短动效（~300ms 淡出）可用但可能有 **banding**
 - 色彩 4bit，缩略图/线框可接受；精细照片 UI 不推荐
-- Mali-400 ES2 常支持 `GL_RGBA4` FBO attachment → **`LV_GPU_COLOR_RGBA4444`** 可作为 **`LV_GPU_COMPOSITE_COLOR_FORMAT` 备选**
+- Mali-400 ES2 常支持 `GL_RGBA4` FBO attachment → **`LV_GPU_COLOR_RGBA4444`** 可作为 **`LV_GPU_RENDERER_COLOR_FORMAT` 备选**
 
 ```c
 typedef enum {
@@ -1566,8 +1727,8 @@ typedef enum {
 **配置（§8）**：
 
 ```c
-#define LV_GPU_COMPOSITE_COLOR_FORMAT   LV_GPU_COLOR_RGBA8888  /* 8888 | 565_A8 | 4444 | 5551 */
-#define LV_GPU_COMPOSITE_BAKE_FORMAT      LV_GPU_COLOR_RGB565
+#define LV_GPU_RENDERER_COLOR_FORMAT   LV_GPU_COLOR_RGBA8888  /* 8888 | 565_A8 | 4444 | 5551 */
+#define LV_GPU_RENDERER_BAKE_FORMAT      LV_GPU_COLOR_RGB565
 /* 565_A8 → NEAR_FULL 验收；4444/5551 → DEGRADED / BINARY（§0.7.1） */
 ```
 
@@ -1582,15 +1743,15 @@ typedef enum {
 ### 7.3 目录结构（更新）
 
 ```
-lvgl/src/draw/gpu_composite/
-  lv_draw_gpu_composite.c
-  lv_gpu_composite_gles2.c
-  lv_gpu_composite_batch_2d.c
-  lv_gpu_composite_batch_3d.c    # mesh + depth + alpha sort
-  lv_gpu_composite_plane_bake.c  # 场景一 PLANE 烘焙（§3.4）
-  lv_gpu_composite_viewport.c
-  lv_gpu_composite_framegraph.c  # pass 顺序 + ui_mode（§7.5）
-  lv_gpu_composite_res.c
+lvgl/src/draw/gpu_renderer/
+  lv_draw_gpu_renderer.c
+  lv_gpu_renderer_gles2.c
+  lv_gpu_renderer_batch_2d.c
+  lv_gpu_renderer_batch_3d.c    # mesh + depth + alpha sort
+  lv_gpu_renderer_plane_bake.c  # 场景一 PLANE 烘焙（§3.4）
+  lv_gpu_renderer_viewport.c
+  lv_gpu_renderer_framegraph.c  # pass 顺序 + ui_mode（§7.5）
+  lv_gpu_renderer_res.c
 
 lvgl/src/3d/                     # 见第 5 节
 lvgl/src/widgets/3d/             # scene/viewport/camera/mesh/...
@@ -1601,20 +1762,20 @@ lvgl/src/widgets/3d/             # scene/viewport/camera/mesh/...
 ## 8. 配置项（修订）
 
 ```c
-#define LV_USE_GPU_COMPOSITE           1
-#define LV_USE_DRAW_GPU_COMPOSITE      1
+#define LV_USE_GPU_RENDERER           1
+#define LV_USE_DRAW_GPU_RENDERER      1
 #define LV_USE_3D                      1   /* 3D 子系统 + widget + obj 3D 属性 */
 #define LV_USE_3D_WIDGETS              1   /* lv_3dscene/mesh/... */
 #define LV_USE_3D_OBJ_PROPERTIES       1   /* 通用 obj 3D 属性 */
 #define LV_USE_3DTEXTURE_LEGACY        0   /* 旧 external tex，默认关 */
-#define LV_GPU_COMPOSITE_GLES_API      2   /* 2=Mali-400 强制, 3=新 GPU, 0=AUTO */
-#define LV_GPU_COMPOSITE_ALLOW_GLES3   0   /* 量产 Mali-400 板卡设为 0 */
-#define LV_GPU_COMPOSITE_DEPTH_BITS    16  /* Mali-400: 16；新 GPU: 24 */
-#define LV_GPU_COMPOSITE_USE_ETC1      1   /* Mali 优先 ETC1 [GL2] */
-#define LV_GPU_COMPOSITE_LOG_CAPS      1   /* 启动打印 caps 表 */
-#define LV_GPU_COMPOSITE_AR_PASSTHROUGH 1  /* 1=RGBA8888+α=0；0 才允许 Display 用 RGB565 */
-#define LV_GPU_COMPOSITE_COLOR_FORMAT   LV_GPU_COLOR_RGBA8888  /* 8888|4444|5551，caps 自动降级 */
-#define LV_GPU_COMPOSITE_BAKE_FORMAT    LV_GPU_COLOR_RGB565
+#define LV_GPU_RENDERER_GLES_API      2   /* 2=Mali-400 强制, 3=新 GPU, 0=AUTO */
+#define LV_GPU_RENDERER_ALLOW_GLES3   0   /* 量产 Mali-400 板卡设为 0 */
+#define LV_GPU_RENDERER_DEPTH_BITS    16  /* Mali-400: 16；新 GPU: 24 */
+#define LV_GPU_RENDERER_USE_ETC1      1   /* Mali 优先 ETC1 [GL2] */
+#define LV_GPU_RENDERER_LOG_CAPS      1   /* 启动打印 caps 表 */
+#define LV_GPU_RENDERER_AR_PASSTHROUGH 1  /* 1=RGBA8888+α=0；0 才允许 Display 用 RGB565 */
+#define LV_GPU_RENDERER_COLOR_FORMAT   LV_GPU_COLOR_RGBA8888  /* 8888|4444|5551，caps 自动降级 */
+#define LV_GPU_RENDERER_BAKE_FORMAT    LV_GPU_COLOR_RGB565
 #define LV_DISPLAY_RENDER_MODE         LV_DISPLAY_RENDER_MODE_EVENT_DRIVEN  /* 静态 launcher idle 0fps */
 #define LV_DISPLAY_WIDTH               1920
 #define LV_DISPLAY_HEIGHT              1080
@@ -1629,7 +1790,7 @@ lvgl/src/widgets/3d/             # scene/viewport/camera/mesh/...
 ## 9. 实施阶段（修订）
 
 ### Phase 1 — 3D 核心 + compositor + **AR 透明底**（**[GL2]**）
-- `lv_gpu_composite_caps` 探测 + **gles2 全路径**
+- `lv_gpu_renderer_caps` 探测 + **gles2 全路径**
 - compositor **RGBA8 + alpha=0 clear**（§7.4）
 - `lvgl/src/3d/`：transform、mesh(box/line)、camera、scene collect
 - Widgets：`lv_3dscene`、`lv_3dcamera`、`lv_3dviewport`、`lv_3dmesh`
@@ -1679,11 +1840,11 @@ lvgl/src/widgets/3d/             # scene/viewport/camera/mesh/...
 
 修改 LVGL/LVGL 需 **三条线并行**，**以 §0 两场景为验收基准**：
 
-1. **Render 后端**：`lv_draw_gpu_composite` — AR 穿透、**帧图 pass**、plane bake、3D alpha sort、低功耗
+1. **Render 后端**：`lv_draw_gpu_renderer` — AR 穿透、**帧图 pass**、plane bake、3D alpha sort、低功耗
 2. **3D 对象模型**：scene graph + **`lv_3dstack` / segment_pool / plane_bake / ui_mode**
 3. **2D/3D 统一**：PLANE 缩略图（场景一）+ wireframe 楼群（场景二）+ OVERLAY 车道
 
-**场景验证**：§0.6 缺口已闭合；§0.7 指标 + `verify_scenario*.sh` 为后端完成定义。
+**场景验证**：§0.6 缺口已闭合；§0.7 指标 + **§14** 测试流程为后端完成定义。
 
 ---
 
@@ -1719,7 +1880,7 @@ flowchart LR
 
 | LVGL 设计模块 | `lv_port_linux` 落点 |
 |-------------|---------------------|
-| `lv_draw_gpu_composite/` | `lvgl/src/draw/gpu_composite/` |
+| `lv_draw_gpu_renderer/` | `lvgl/src/draw/gpu_renderer/` |
 | `lvgl/src/3d/` | 同路径（新增） |
 | `lvgl/src/widgets/3d/` | 同路径（新增） |
 | display driver / AR α | 扩展 **`lvgl/src/drivers/`** 下当前 backend（GLFW / DRM / Wayland） |
@@ -1731,7 +1892,7 @@ flowchart LR
 
 | 现有 config | 用途 | 与 LVGL 关系 |
 |------------|------|------------|
-| [`configs/glfw-3d.defaults`](/home/gz/lv_port_linux/configs/glfw-3d.defaults) | GLFW + `LV_USE_DRAW_OPENGLES` + `lv_3dtexture` | **Legacy 参考**；LVGL 应 **`LV_USE_DRAW_GPU_COMPOSITE`** |
+| [`configs/glfw-3d.defaults`](/home/gz/lv_port_linux/configs/glfw-3d.defaults) | GLFW + `LV_USE_DRAW_OPENGLES` + `lv_3dtexture` | **Legacy 参考**；LVGL 应 **`LV_USE_DRAW_GPU_RENDERER`** |
 | [`configs/drm-egl-3d.defaults`](/home/gz/lv_port_linux/configs/drm-egl-3d.defaults) | 嵌入式 DRM + 3D texture | 量产眼镜更接近此路径 |
 | [`lv_conf.defaults`](/home/gz/lv_port_linux/lv_conf.defaults) | 默认 `LV_COLOR_DEPTH 16`、fbdev | AR 须 **独立 config**，见下 |
 
@@ -1742,17 +1903,17 @@ flowchart LR
 LV_USE_GLFW 1
 LV_USE_OPENGLES 1
 LV_USE_DRAW_OPENGLES 0
-LV_USE_DRAW_GPU_COMPOSITE 1
-LV_USE_GPU_COMPOSITE 1
+LV_USE_DRAW_GPU_RENDERER 1
+LV_USE_GPU_RENDERER 1
 LV_USE_3D 1
 LV_USE_3D_WIDGETS 1
 LV_USE_3DTEXTURE_LEGACY 0
 LV_USE_3DTEXTURE 0
 
 LV_COLOR_DEPTH 32
-LV_GPU_COMPOSITE_AR_PASSTHROUGH 1
-LV_GPU_COMPOSITE_COLOR_FORMAT LV_GPU_COLOR_RGBA8888
-LV_GPU_COMPOSITE_GLES_API 2
+LV_GPU_RENDERER_AR_PASSTHROUGH 1
+LV_GPU_RENDERER_COLOR_FORMAT LV_GPU_COLOR_RGBA8888
+LV_GPU_RENDERER_GLES_API 2
 LV_DISPLAY_RENDER_MODE LV_DISPLAY_RENDER_MODE_EVENT_DRIVEN
 
 # Phase 1 demo 可先 800x480；场景验收再 1920x1080
@@ -1791,8 +1952,138 @@ cmake --build build-vgl -j
 
 ```
 请阅读 docs/LVGL_2D3D_BACKEND_PLAN.md，在 lv_port_linux 执行 Phase 1：
-新增 configs/vgl-ar-glfw.defaults、lv_draw_gpu_composite 骨架、
+新增 configs/vgl-ar-glfw.defaults、lv_draw_gpu_renderer 骨架、
 透明底静态场景二 demo，构建命令 cmake -B build-vgl -DCONFIG=vgl-ar-glfw。
 ```
+
+---
+
+## 14. 测试与验证
+
+本节记录 **LVGL 官方单元测试**（`OPTIONS_TEST_GPU_RENDERER`）与 **lv_port_linux 场景验证**（`scripts/verify_scenario*.sh`）的安装与运行方式，对应 §0.7 可回归验收（G12）。
+
+### 14.1 Ruby 安装（LVGL `tests/main.py` 必需）
+
+测试框架用 Ruby 生成 Unity test runner，未安装 `ruby` 时 `cmake` 会失败。
+
+**推荐（Ubuntu / Debian）**
+
+```sh
+sudo apt update
+sudo apt install -y ruby ruby-dev
+```
+
+**与 LVGL CI 一致（含 Ruby 及更多测试依赖）**
+
+```sh
+cd lvgl
+sudo scripts/install-prerequisites.sh
+```
+
+**仅最小安装 Ruby**
+
+```sh
+sudo apt install -y ruby
+```
+
+**使用 snap**
+
+```sh
+sudo snap install ruby --classic
+```
+
+**验证**
+
+```sh
+ruby --version
+which ruby
+```
+
+### 14.2 其他依赖
+
+| 依赖 | 用途 | 安装 |
+|------|------|------|
+| **pypng** | 截图对比 / `LVGLImage.py` | `pip3 install pypng` |
+| **lz4** | 测试资源解压 | `pip3 install lz4` |
+| **xvfb** | 无显示器时跑 OpenGL/GLFW 测试 | `sudo apt install -y xvfb` |
+| **OpenGL + GLFW** | gpu_renderer 后端 | `install-prerequisites.sh` 或系统开发包 |
+| **ninja** | 测试构建 | `sudo apt install -y ninja-build` |
+
+### 14.3 LVGL 官方 gpu_renderer 单元测试
+
+在 `lvgl` 子模块目录下：
+
+```sh
+cd lvgl
+xvfb-run -a ./tests/main.py --build-options OPTIONS_TEST_GPU_RENDERER test
+```
+
+仅跑 gpu_renderer 用例：
+
+```sh
+xvfb-run -a ./tests/main.py --build-options OPTIONS_TEST_GPU_RENDERER \
+  --test-suite test_gpu_renderer test
+```
+
+从 **lv_port_linux 根目录** 一键脚本：
+
+```sh
+./scripts/run_lvgl_gpu_renderer_tests.sh
+```
+
+**相关源文件**
+
+| 路径 | 说明 |
+|------|------|
+| `lvgl/tests/src/lv_test_conf_gpu_renderer.h` | 测试 Kconfig：`LV_USE_DRAW_GPU_RENDERER`、3D、GLFW |
+| `lvgl/tests/src/lv_test_display_gpu_renderer.c` | 隐藏 GLFW 窗口 + OpenGL display |
+| `lvgl/tests/src/test_cases/draw/test_gpu_renderer_3dbutton.c` | 配置检查 + 3D 按钮 framegraph 统计 |
+| `lvgl/tests/README.md` | 上游测试总览 |
+
+**用例说明**
+
+1. **test_gpu_renderer_config_enabled** — 确认 `LV_USE_DRAW_GPU_RENDERER` / `LV_USE_3D` 已开启
+2. **test_gpu_renderer_3dbutton_framegraph** — 渲染 3D 按钮，校验 `gpu_3d_draws`、`fg_pass_count`、`fg_gl_finish_count ≤ 1`、可见像素等
+
+### 14.4 lv_port_linux 场景验证（集成测试）
+
+与官方单元测试互补，覆盖完整 demo 与 `LVGL_VERIFY`（§7.7 验收表）：
+
+```sh
+./scripts/verify_all_scenarios.sh   # 场景 1–4 一键
+./scripts/verify_scenario1.sh   # AR 九宫格
+./scripts/verify_scenario2.sh   # NAV AR
+./scripts/verify_scenario3.sh   # 3D stress
+./scripts/verify_scenario4.sh   # 3D button
+
+# Wayland 后端
+LVGL_BACKEND=wayland ./scripts/verify_scenario_wayland.sh
+```
+
+需先构建 `lvglsim`，例如：
+
+```sh
+cmake -B build-vgl-glfw -DCONFIG=lvgl2d3dbackend-glfw
+cmake --build build-vgl-glfw -j
+```
+
+### 14.5 两套测试对比
+
+| | LVGL `OPTIONS_TEST_GPU_RENDERER` | lv_port_linux `verify_scenario*` |
+|--|----------------------------------|----------------------------------|
+| 位置 | `lvgl/tests/` | `scripts/` + `src/demos/lvgl_verify.c` |
+| 框架 | Unity + `main.py` | 环境变量 + 进程退出码 |
+| 显示 | 隐藏 GLFW 窗口 | `lvglsim` + xvfb（glfw）或 Wayland |
+| 覆盖 | 3D 按钮 + framegraph 统计 | 场景 1–4 全帧验证 |
+
+### 14.6 常见问题
+
+| 现象 | 处理 |
+|------|------|
+| `Could NOT find Ruby` | 按 §14.1 安装 `ruby`，重新 `cmake` |
+| `ImportError: Need pypng package` | `pip3 install pypng` |
+| `ImportError: lz4` / 测试资源解压失败 | `pip3 install lz4` |
+| 无显示器 / SSH 无 X11 | 使用 `xvfb-run -a` 包裹测试命令 |
+| `run_lvgl_gpu_renderer_tests: install ruby` | 同上 |
 
 ---

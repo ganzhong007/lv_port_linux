@@ -13,7 +13,7 @@ lvgl_verify_run() {
   local build config backend_args
   case "$backend" in
     glfw)
-      build="${LVGL_BUILD_DIR:-$root/build-lvgl-glfw}"
+      build="${LVGL_BUILD_DIR:-$root/build-vgl-glfw}"
       config="lvgl2d3dbackend-glfw"
       backend_args=(-b glfw)
       ;;

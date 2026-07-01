@@ -1,0 +1,60 @@
+name: Verify gpu_renderer scenarios
+
+on:
+  push:
+    branches: [master, feat/**]
+  pull_request:
+
+jobs:
+  verify-glfw:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential cmake ninja-build \
+            libglfw3-dev libgl1-mesa-dev libpng-dev libjpeg-dev \
+            libfreetype6-dev libdrm-dev libinput-dev \
+            ruby ruby-dev xvfb
+          pip3 install pypng lz4
+
+      - name: Build lvglsim (lvgl2d3dbackend-glfw)
+        run: |
+          cmake -B build-vgl-glfw -DCONFIG=lvgl2d3dbackend-glfw -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-vgl-glfw -j"$(nproc)" lvglsim
+
+      - name: Run scenario verification
+        run: |
+          chmod +x scripts/verify_all_scenarios.sh scripts/verify_scenario*.sh
+          ./scripts/verify_all_scenarios.sh
+
+  lvgl-unit-gpu-renderer:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential cmake ninja-build \
+            libglfw3-dev libgl1-mesa-dev libpng-dev libjpeg-dev \
+            libfreetype6-dev libdrm-dev libinput-dev \
+            ruby ruby-dev xvfb
+          pip3 install pypng lz4
+          sudo scripts/install-prerequisites.sh || true
+
+      - name: LVGL gpu_renderer unit tests
+        working-directory: lvgl
+        run: |
+          xvfb-run -a ./tests/main.py --clean --build-options OPTIONS_TEST_GPU_RENDERER \
+            --test-suite test_gpu_renderer test

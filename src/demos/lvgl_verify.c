@@ -5,8 +5,8 @@
 #include "lvgl/lvgl.h"
 #include "lvgl_demos.h"
 
-#if LV_USE_3D && LV_USE_DRAW_GPU_COMPOSITE
-#include "draw/gpu_composite/lv_draw_gpu_composite.h"
+#if LV_USE_3D && LV_USE_DRAW_GPU_RENDERER
+#include "draw/gpu_renderer/lv_draw_gpu_renderer.h"
 #if LV_USE_SNAPSHOT
 #include "lvgl/3d/lv_3d_plane_bake.h"
 #endif
@@ -25,7 +25,7 @@ static uint32_t last_verified_serial;
 static float s2_min_z_first;
 static float s2_min_z_last;
 
-#if LV_USE_3D && LV_USE_DRAW_GPU_COMPOSITE
+#if LV_USE_3D && LV_USE_DRAW_GPU_RENDERER
 
 static int env_int(const char * name, int default_val)
 {
@@ -41,7 +41,7 @@ static int env_bool(const char * name, int default_val)
     return atoi(v) != 0;
 }
 
-static void verify_log_path_stats(const lv_gpu_composite_verify_stats_t * s)
+static void verify_log_path_stats(const lv_gpu_renderer_verify_stats_t * s)
 {
     if(s->gl_renderer[0]) {
         printf("LVGL_VERIFY: path renderer=%s gpu2d=%u gpu3d=%u sw_overlay=%u sw_raster=%u "
@@ -70,7 +70,7 @@ static void verify_log_path_stats(const lv_gpu_composite_verify_stats_t * s)
     }
 }
 
-static int verify_fg_framegraph(const lv_gpu_composite_verify_stats_t * s)
+static int verify_fg_framegraph(const lv_gpu_renderer_verify_stats_t * s)
 {
     if(!env_bool("LVGL_VERIFY_FG", 1)) return 1;
 
@@ -138,7 +138,7 @@ static int verify_fg_framegraph(const lv_gpu_composite_verify_stats_t * s)
     return 1;
 }
 
-static int verify_gpu_path(const lv_gpu_composite_verify_stats_t * s)
+static int verify_gpu_path(const lv_gpu_renderer_verify_stats_t * s)
 {
     if(!env_bool("LVGL_VERIFY_GPU_PATH", 0)) return 1;
 
@@ -166,7 +166,7 @@ static int verify_gpu_path(const lv_gpu_composite_verify_stats_t * s)
     return 1;
 }
 
-static int verify_frame_content(int frame_idx, const lv_gpu_composite_verify_stats_t * s)
+static int verify_frame_content(int frame_idx, const lv_gpu_renderer_verify_stats_t * s)
 {
     if(s->last_flush_viewports < 1) {
         printf("LVGL_VERIFY: FAIL scenario=%d frame=%d no viewport flush\n", scenario_id, frame_idx);
@@ -278,8 +278,8 @@ static void verify_one_frame(lv_display_t * disp)
 
     const int frame_idx = frames_checked + 1;
 
-    lv_gpu_composite_verify_stats_t stats;
-    if(!lv_gpu_composite_verify_stats(disp, &stats)) {
+    lv_gpu_renderer_verify_stats_t stats;
+    if(!lv_gpu_renderer_verify_stats(disp, &stats)) {
         printf("LVGL_VERIFY: FAIL scenario=%d frame=%d (readback failed)\n", scenario_id, frame_idx);
         verify_done = 1;
         exit(1);
@@ -299,7 +299,7 @@ static void verify_one_frame(lv_display_t * disp)
         const char * dump_dir = getenv("LVGL_VERIFY_DUMP");
         char frame_path[512];
         lv_snprintf(frame_path, sizeof(frame_path), "%s/frame_lvgl.rgba", dump_dir);
-        if(lv_gpu_composite_dump_frame_lvgl(disp, frame_path)) {
+        if(lv_gpu_renderer_dump_frame_lvgl(disp, frame_path)) {
             printf("LVGL_VERIFY: dump frame -> %s\n", frame_path);
         }
 #if LV_USE_SNAPSHOT
@@ -313,7 +313,8 @@ static void verify_one_frame(lv_display_t * disp)
 #endif
     }
 
-    if(stats.corner_min_alpha > 10 && scenario_id != 4) {
+    if(stats.corner_min_alpha > 10 && scenario_id != 4 && scenario_id != 1) {
+        /* Scenario 1: full-viewport sky backdrop — corners are opaque blue, not AR clear. */
         printf("LVGL_VERIFY: FAIL scenario=%d frame=%d corner_min_alpha=%u (expect ~0 AR passthrough)\n",
                scenario_id, frame_idx, (unsigned)stats.corner_min_alpha);
         verify_done = 1;
@@ -429,7 +430,7 @@ int lvgl_verify_run(int id)
     printf("LVGL_VERIFY: start scenario=%d warmup=%d frames=%d\n",
            scenario_id, warmup_left, frames_to_check);
 
-    lv_gpu_composite_set_frame_ready_cb(verify_frame_cb);
+    lv_gpu_renderer_set_frame_ready_cb(verify_frame_cb);
     lv_timer_create(verify_timer_cb, 16, NULL);
     return 0;
 }
@@ -439,7 +440,7 @@ int lvgl_verify_run(int id)
 int lvgl_verify_run(int id)
 {
     LV_UNUSED(id);
-    printf("LVGL_VERIFY: SKIP (gpu_composite not enabled)\n");
+    printf("LVGL_VERIFY: SKIP (gpu_renderer not enabled)\n");
     return 0;
 }
 
