@@ -5,9 +5,9 @@
 #include "lvgl/lvgl.h"
 #include "lvgl_demos.h"
 
-#if LV_USE_3D && LV_USE_3D_WIDGETS && LV_USE_DRAW_GPU_COMPOSITE
+#if LV_USE_3D && LV_USE_3D_WIDGETS && LV_USE_DRAW_GPU_RENDERER
 
-#include "draw/gpu_composite/lv_draw_gpu_composite.h"
+#include "draw/gpu_renderer/lv_draw_gpu_renderer.h"
 
 #include <math.h>
 #include <stdlib.h>
@@ -139,8 +139,8 @@ static void hud_update_path_stats(void)
 {
     if(!g_stats_label) return;
 
-    lv_gpu_composite_path_stats_t st;
-    lv_gpu_composite_get_path_stats(&st);
+    lv_gpu_renderer_path_stats_t st;
+    lv_gpu_renderer_get_path_stats(&st);
     if(st.gl_renderer[0]) {
         lv_strncpy(g_renderer_cached, st.gl_renderer, sizeof(g_renderer_cached) - 1);
         g_renderer_cached[sizeof(g_renderer_cached) - 1] = '\0';
@@ -206,8 +206,8 @@ static void anim_cb(lv_timer_t * t)
 
 void lvgl_scenario3_gpu_stress_create(void)
 {
-#if LV_USE_DRAW_GPU_COMPOSITE
-    lv_gpu_composite_set_ui_mode(LV_GPU_COMPOSITE_UI_GENERIC);
+#if LV_USE_DRAW_GPU_RENDERER
+    lv_gpu_renderer_set_ui_mode(LV_GPU_RENDERER_UI_GENERIC);
 #endif
     g_mesh_count = env_int("LVGL_S3_MESH_COUNT", LVGL_S3_MESH_COUNT);
     if(g_mesh_count < 16) g_mesh_count = 16;
@@ -253,7 +253,7 @@ int lvgl_scenario3_get_mesh_count(void)
 
 void lvgl_scenario3_gpu_stress_create(void)
 {
-    printf("LVGL_SCENARIO3: requires LV_USE_3D + LV_USE_DRAW_GPU_COMPOSITE\n");
+    printf("LVGL_SCENARIO3: requires LV_USE_3D + LV_USE_DRAW_GPU_RENDERER\n");
 }
 
 int lvgl_scenario3_get_mesh_count(void)

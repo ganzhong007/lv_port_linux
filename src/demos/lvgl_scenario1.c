@@ -5,8 +5,8 @@
 #include "lvgl/lvgl.h"
 #include "lvgl_demos.h"
 
-#if LV_USE_DRAW_GPU_COMPOSITE
-#include "draw/gpu_composite/lv_draw_gpu_composite.h"
+#if LV_USE_DRAW_GPU_RENDERER
+#include "draw/gpu_renderer/lv_draw_gpu_renderer.h"
 #endif
 
 #if LV_USE_3D && LV_USE_3D_WIDGETS && LV_USE_3DSTACK
@@ -804,8 +804,8 @@ static void capture_grid_homes(lv_obj_t * stack)
 
 void lvgl_scenario1_launcher_create(void)
 {
-#if LV_USE_DRAW_GPU_COMPOSITE
-    lv_gpu_composite_set_ui_mode(LV_GPU_COMPOSITE_UI_AR_LAUNCHER);
+#if LV_USE_DRAW_GPU_RENDERER
+    lv_gpu_renderer_set_ui_mode(LV_GPU_RENDERER_UI_AR_LAUNCHER);
 #endif
     lv_display_t * disp = lv_display_get_default();
     if(disp) lv_display_set_antialiasing(disp, true);

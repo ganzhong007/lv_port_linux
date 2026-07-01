@@ -3,6 +3,7 @@ project(lvgl)
 
 option(WERROR "Treat warnings as errors for LVGL targets" OFF)
 option(ASAN "Enable Sanitizer Options" OFF)
+option(LV_A53_STATIC "AArch64 Cortex-A53 fully-static executable (EGL/GLES remain dynamic)" OFF)
 
 # Set policy to allow to run the target_link_libraries cmd on targets that are build
 # in another directory.
@@ -252,12 +253,17 @@ endif()
 if (CONFIG_LV_USE_GLFW)
 
     message("Including GLFW support")
-    find_package(PkgConfig REQUIRED)
-    pkg_check_modules(GLFW3 REQUIRED glfw3)
-    pkg_check_modules(GLEW REQUIRED glew)
-
-    list(APPEND PKG_CONFIG_LIB ${GLFW3_LIBRARIES})
-    list(APPEND PKG_CONFIG_LIB ${GLEW_LIBRARIES})
+    if(LV_A53_STATIC)
+        include(${CMAKE_SOURCE_DIR}/cmake/a53_static_deps.cmake)
+        list(APPEND PKG_CONFIG_LIB ${A53_STATIC_GL_LIBS})
+        list(APPEND PKG_CONFIG_INC ${A53_STATIC_GL_INC})
+    else()
+        find_package(PkgConfig REQUIRED)
+        pkg_check_modules(GLFW3 REQUIRED glfw3)
+        pkg_check_modules(GLEW REQUIRED glew)
+        list(APPEND PKG_CONFIG_LIB ${GLFW3_LIBRARIES})
+        list(APPEND PKG_CONFIG_LIB ${GLEW_LIBRARIES})
+    endif()
     list(APPEND LV_LINUX_BACKEND_SRC src/lib/display_backends/glfw3.c)
 
 endif()
@@ -423,6 +429,17 @@ target_include_directories(lvglsim PRIVATE
 
 # Repeat lvgl_linux to resolve circular dependency with lvgl
 target_link_libraries(lvglsim lvgl_linux lvgl lvgl_linux)
+
+if(LV_A53_STATIC)
+    # Static glibc + app; GPU userspace (EGL/GLES) stays dynamic on target.
+    target_link_options(lvglsim PRIVATE
+        "LINKER:-static"
+        "LINKER:-Wl,-Bdynamic"
+        "LINKER:-lEGL"
+        "LINKER:-lGLESv2"
+    )
+    set_target_properties(lvglsim PROPERTIES LINK_SEARCH_START_STATIC ON)
+endif()
 
 if(WERROR)
     target_compile_options(lvglsim PRIVATE -Werror)

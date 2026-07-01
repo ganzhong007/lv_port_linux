@@ -24,8 +24,23 @@ static void configure_simulator(int argc, char ** argv)
 
     const char * env_w = getenv("LV_SIM_WINDOW_WIDTH");
     const char * env_h = getenv("LV_SIM_WINDOW_HEIGHT");
-    settings.window_width = atoi(env_w ? env_w : "800");
-    settings.window_height = atoi(env_h ? env_h : "480");
+    const char * env_scale = getenv("LV_SIM_SCALE");
+    int base_w = atoi(env_w ? env_w : "800");
+    int base_h = atoi(env_h ? env_h : "480");
+    if(env_scale) {
+        int scale = atoi(env_scale);
+        if(scale < 1) scale = 1;
+        settings.window_width = base_w * scale;
+        settings.window_height = base_h * scale;
+    }
+    else if(env_w && env_h) {
+        settings.window_width = base_w;
+        settings.window_height = base_h;
+    }
+    else {
+        settings.window_width = base_w * 4;
+        settings.window_height = base_h * 4;
+    }
 
     while((opt = getopt(argc, argv, "b:fmW:H:R:BVh")) != -1) {
         switch(opt) {

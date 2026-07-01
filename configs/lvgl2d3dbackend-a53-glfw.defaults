@@ -1,5 +1,5 @@
-# LVGL 2D/3D — GLFW dev simulator (Phase 1)
-# Build: cmake -B build-vgl -DCONFIG=lvgl2d3dbackend-glfw && cmake --build build-vgl -j
+# LVGL 2D/3D — ARM Cortex-A53 (AArch64 Linux), GLFW + GLES2 gpu_renderer
+# Build: scripts/build_a53_static.sh
 
 LV_USE_GLFW 1
 LV_USE_OPENGLES 1
@@ -24,7 +24,8 @@ LV_GPU_RENDERER_ALLOW_GLES3 0
 LV_GPU_RENDERER_DEPTH_BITS 16
 LV_GPU_RENDERER_USE_ETC1 1
 LV_GPU_RENDERER_LOG_CAPS 1
-LV_GPU_RENDERER_MSAA_SAMPLES 4
+LV_GPU_RENDERER_MSAA_SAMPLES 0
+
 LV_USE_3DSTACK 1
 LV_USE_3D_SEGMENT_POOL 1
 LV_USE_SNAPSHOT 1
