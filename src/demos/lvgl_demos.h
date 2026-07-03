@@ -9,6 +9,9 @@
 extern "C" {
 #endif
 
+/** Advance animated demos (segment pool scroll, etc.) before display refresh. */
+void lvgl_demos_pre_refresh(uint32_t elapsed_ms);
+
 void lvgl_scenario1_launcher_create(void);
 void lvgl_scenario2_skyline_create(void);
 void lvgl_scenario3_gpu_stress_create(void);

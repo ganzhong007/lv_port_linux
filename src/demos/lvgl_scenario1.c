@@ -885,7 +885,9 @@ void lvgl_scenario1_launcher_create(void)
     lv_obj_set_size(g_vp, LV_PCT(100), LV_PCT(100));
     lv_3dviewport_set_camera(g_vp, cam);
     lv_3dviewport_set_scene(g_vp, scene);
+    lv_3dviewport_set_pickable(g_vp, true);
     lv_obj_add_flag(g_vp, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_move_foreground(g_vp);
     lv_obj_add_event_cb(g_vp, vp_click_cb, LV_EVENT_CLICKED, NULL);
 
     g_focused = -1;

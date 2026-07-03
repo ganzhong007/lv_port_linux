@@ -138,10 +138,28 @@ static void s2_build_segment(lv_obj_t * segment_root, uint32_t seg_id, float seg
     spawn_road_segment(segment_root, seg_base_z);
 }
 
+void lvgl_demos_pre_refresh(uint32_t elapsed_ms)
+{
+    if(!g_pool || elapsed_ms == 0) return;
+    lv_3d_segment_pool_tick(g_pool, (float)elapsed_ms / 1000.0f);
+}
+
+static uint32_t s_pool_last_ms;
+
 static void pool_timer_cb(lv_timer_t * t)
 {
     LV_UNUSED(t);
-    if(g_pool) lv_3d_segment_pool_tick(g_pool, 0.016f);
+    if(!g_pool) return;
+
+    uint32_t now = lv_tick_get();
+    float dt = 0.016f;
+    if(s_pool_last_ms != 0) {
+        dt = (float)(now - s_pool_last_ms) / 1000.0f;
+        if(dt < 0.001f) return;
+        if(dt > 0.25f) dt = 0.25f;
+    }
+    s_pool_last_ms = now;
+    lv_3d_segment_pool_tick(g_pool, dt);
 }
 
 static void nav_hud_create(lv_obj_t * scr)
@@ -184,7 +202,7 @@ void lvgl_scenario2_skyline_create(void)
 
     lv_3d_segment_pool_cfg_t cfg = {
         .segment_length = 420.0f,
-        .scroll_speed = 140.0f,
+        .scroll_speed = 220.0f,
         .pool_size = 8,
         .recycle_z = 1350.0f,
     };
@@ -215,6 +233,11 @@ float lvgl_scenario2_get_min_seg_z(void)
 }
 
 #else
+
+void lvgl_demos_pre_refresh(uint32_t elapsed_ms)
+{
+    LV_UNUSED(elapsed_ms);
+}
 
 void lvgl_scenario2_skyline_create(void) {}
 

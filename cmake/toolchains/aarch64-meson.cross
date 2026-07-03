@@ -1,0 +1,23 @@
+[binaries]
+c = 'aarch64-linux-gnu-gcc'
+cpp = 'aarch64-linux-gnu-g++'
+ar = 'aarch64-linux-gnu-ar'
+strip = 'aarch64-linux-gnu-strip'
+pkg-config = 'pkg-config'
+wayland-scanner = '/usr/bin/wayland-scanner'
+
+[built-in options]
+c_args = ['-mcpu=cortex-a53', '-O2', '-fno-lto']
+cpp_args = ['-mcpu=cortex-a53', '-O2', '-fno-lto']
+c_link_args = ['-fno-lto']
+cpp_link_args = ['-fno-lto']
+
+[host_machine]
+system = 'linux'
+cpu_family = 'aarch64'
+cpu = 'cortex-a53'
+endian = 'little'
+
+[properties]
+sys_root = '/usr/aarch64-linux-gnu'
+skip_sanity_check = true

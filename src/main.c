@@ -85,6 +85,12 @@ int main(int argc, char ** argv)
         die("Failed to initialize display backend");
     }
 
+#if LV_USE_EVDEV
+    if(driver_backends_init_backend("EVDEV") == -1) {
+        LV_LOG_WARN("EVDEV init failed — pointer input disabled");
+    }
+#endif
+
     if(settings.rotation) {
         lv_display_set_rotation(NULL, settings.rotation);
     }

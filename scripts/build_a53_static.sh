@@ -18,8 +18,14 @@ CONFIG="${LVGL_A53_CONFIG:-lvgl2d3dbackend-a53-glfw}"
 JOBS="${JOBS:-$(nproc)}"
 SRC="$BUILD/_src"
 
-CC=aarch64-linux-gnu-gcc
-CXX=aarch64-linux-gnu-g++
+export CC=aarch64-linux-gnu-gcc
+export CXX=aarch64-linux-gnu-g++
+export AR=aarch64-linux-gnu-ar
+export RANLIB=aarch64-linux-gnu-ranlib
+export CFLAGS="-mcpu=cortex-a53 -O2 -fno-lto --sysroot=/usr/aarch64-linux-gnu"
+export CXXFLAGS="-mcpu=cortex-a53 -O2 -fno-lto --sysroot=/usr/aarch64-linux-gnu"
+export LDFLAGS="-fno-lto --sysroot=/usr/aarch64-linux-gnu"
+
 
 if ! command -v "$CC" >/dev/null 2>&1; then
     echo "error: install cross compiler: sudo apt install gcc-aarch64-linux-gnu g++-aarch64-linux-gnu" >&2

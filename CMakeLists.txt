@@ -4,6 +4,7 @@ project(lvgl)
 option(WERROR "Treat warnings as errors for LVGL targets" OFF)
 option(ASAN "Enable Sanitizer Options" OFF)
 option(LV_A53_STATIC "AArch64 Cortex-A53 fully-static executable (EGL/GLES remain dynamic)" OFF)
+option(LV_PETALINUX_STATIC "PetaLinux fbdev mostly-static executable (libevdev may stay dynamic)" OFF)
 
 # Set policy to allow to run the target_link_libraries cmd on targets that are build
 # in another directory.
@@ -112,6 +113,15 @@ if (CONFIG_LV_USE_LINUX_DRM_GBM_BUFFERS OR CONFIG_LV_LINUX_DRM_USE_EGL)
 
 endif()
 
+if (CONFIG_LV_USE_OPENGLES AND (CONFIG_LV_LINUX_DRM_USE_EGL OR CONFIG_LV_WAYLAND_USE_EGL OR CONFIG_LV_USE_GLFW))
+    message("Including EGL/GLES support")
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(EGL REQUIRED egl)
+    pkg_check_modules(GLESv2 REQUIRED glesv2)
+    list(APPEND PKG_CONFIG_LIB ${EGL_LIBRARIES} ${GLESv2_LIBRARIES})
+    list(APPEND PKG_CONFIG_INC ${EGL_INCLUDE_DIRS} ${GLESv2_INCLUDE_DIRS})
+endif()
+
 if (CONFIG_LV_USE_LIBINPUT)
     message("Including libinput support")
 
@@ -152,31 +162,37 @@ if (CONFIG_LV_USE_WAYLAND)
 
     message("Including Wayland support")
 
-    find_package(PkgConfig REQUIRED)
-    pkg_check_modules(WAYLAND_CLIENT REQUIRED wayland-client)
-    pkg_check_modules(WAYLAND_CURSOR REQUIRED wayland-cursor)
-    pkg_check_modules(XKBCOMMON REQUIRED xkbcommon)
-
-    list(APPEND PKG_CONFIG_LIB ${WAYLAND_CLIENT_LIBRARIES})
-    list(APPEND PKG_CONFIG_LIB ${WAYLAND_CURSOR_LIBRARIES})
-    list(APPEND PKG_CONFIG_LIB ${XKBCOMMON_LIBRARIES})
-
-    # Wayland protocols
-    pkg_check_modules(WAYLAND_PROTOCOLS REQUIRED wayland-protocols>=1.20)
-    pkg_get_variable(WAYLAND_PROTOCOLS_BASE wayland-protocols pkgdatadir)
-
-    if(DEFINED ENV{SDKTARGETSYSROOT} AND DEFINED ENV{SYSROOT})
-        message(FATAL_ERROR "Both SDKTARGETSYSROOT and SYSROOT are set. Please set only one.")
-    endif()
-    
-    if(DEFINED ENV{SDKTARGETSYSROOT})
-        set(PROTOCOL_ROOT "$ENV{SDKTARGETSYSROOT}/usr/share/wayland-protocols")
-    elseif(DEFINED ENV{SYSROOT})
-        set(PROTOCOL_ROOT "$ENV{SYSROOT}/usr/share/wayland-protocols")
-    else()
+    if(LV_A53_STATIC)
+        include(${CMAKE_SOURCE_DIR}/cmake/a53_static_wayland_deps.cmake)
+        list(APPEND PKG_CONFIG_LIB ${A53_STATIC_WL_LIBS})
+        list(APPEND PKG_CONFIG_INC ${A53_STATIC_WL_INC})
         set(PROTOCOL_ROOT "/usr/share/wayland-protocols")
+    else()
+        find_package(PkgConfig REQUIRED)
+        pkg_check_modules(WAYLAND_CLIENT REQUIRED wayland-client)
+        pkg_check_modules(WAYLAND_CURSOR REQUIRED wayland-cursor)
+        pkg_check_modules(XKBCOMMON REQUIRED xkbcommon)
+
+        list(APPEND PKG_CONFIG_LIB ${WAYLAND_CLIENT_LIBRARIES})
+        list(APPEND PKG_CONFIG_LIB ${WAYLAND_CURSOR_LIBRARIES})
+        list(APPEND PKG_CONFIG_LIB ${XKBCOMMON_LIBRARIES})
+
+        pkg_check_modules(WAYLAND_PROTOCOLS REQUIRED wayland-protocols>=1.20)
+        pkg_get_variable(WAYLAND_PROTOCOLS_BASE wayland-protocols pkgdatadir)
+
+        if(DEFINED ENV{SDKTARGETSYSROOT} AND DEFINED ENV{SYSROOT})
+            message(FATAL_ERROR "Both SDKTARGETSYSROOT and SYSROOT are set. Please set only one.")
+        endif()
+
+        if(DEFINED ENV{SDKTARGETSYSROOT})
+            set(PROTOCOL_ROOT "$ENV{SDKTARGETSYSROOT}/usr/share/wayland-protocols")
+        elseif(DEFINED ENV{SYSROOT})
+            set(PROTOCOL_ROOT "$ENV{SYSROOT}/usr/share/wayland-protocols")
+        else()
+            set(PROTOCOL_ROOT "/usr/share/wayland-protocols")
+        endif()
     endif()
-    
+
     if(NOT EXISTS ${PROTOCOL_ROOT})
         message(FATAL_ERROR "Wayland protocols not found at ${PROTOCOL_ROOT}")
     endif()
@@ -219,9 +235,11 @@ if (CONFIG_LV_USE_WAYLAND)
 
     if(CONFIG_LV_WAYLAND_USE_EGL)
         message("Including WAYLAND EGL support")
-        pkg_check_modules(WAYLAND_EGL REQUIRED wayland-egl)
-        list(APPEND PKG_CONFIG_LIB ${WAYLAND_EGL_LIBRARIES})
-        list(APPEND PKG_CONFIG_INC ${WAYLAND_EGL_INCLUDE_DIRS})
+        if(NOT LV_A53_STATIC)
+            pkg_check_modules(WAYLAND_EGL REQUIRED wayland-egl)
+            list(APPEND PKG_CONFIG_LIB ${WAYLAND_EGL_LIBRARIES})
+            list(APPEND PKG_CONFIG_INC ${WAYLAND_EGL_INCLUDE_DIRS})
+        endif()
     endif()
     
     list(APPEND PKG_CONFIG_INC ${PROTOCOLS_DIR})
@@ -438,6 +456,28 @@ if(LV_A53_STATIC)
         "LINKER:-lEGL"
         "LINKER:-lGLESv2"
     )
+    set_target_properties(lvglsim PROPERTIES LINK_SEARCH_START_STATIC ON)
+endif()
+
+if(LV_PETALINUX_STATIC)
+  # Static LVGL + libc; GPU/evdev userspace libs stay dynamic on PetaLinux sysroot.
+    target_link_options(lvglsim PRIVATE "LINKER:-static")
+    if(CONFIG_LV_USE_OPENGLES OR CONFIG_LV_USE_GPU_RENDERER)
+        target_link_options(lvglsim PRIVATE
+            "LINKER:-Wl,-Bdynamic"
+            "LINKER:-lEGL"
+            "LINKER:-lGLESv2"
+            "LINKER:-lMali"
+            "LINKER:-lgbm"
+            "LINKER:-ldrm"
+        )
+    endif()
+    if(CONFIG_LV_USE_EVDEV)
+        target_link_options(lvglsim PRIVATE
+            "LINKER:-Wl,-Bdynamic"
+            "LINKER:-levdev"
+        )
+    endif()
     set_target_properties(lvglsim PROPERTIES LINK_SEARCH_START_STATIC ON)
 endif()
 

@@ -106,11 +106,22 @@ static void run_loop_drm(void)
 {
     uint32_t idle_time;
 
-    /* Handle LVGL tasks */
     while(true) {
-        /* Returns the time to the next timer execution */
         idle_time = lv_timer_handler();
-        usleep(idle_time * 1000);
+#if LV_USE_DRAW_GPU_RENDERER
+        {
+            lv_display_t * disp = lv_display_get_default();
+            if(disp) {
+                /* pool_timer_cb runs inside lv_timer_handler above */
+                lv_obj_t * scr = lv_display_get_screen_active(disp);
+                if(scr) lv_obj_invalidate(scr);
+                lv_refr_now(disp);
+                lv_linux_drm_gpu_present(disp);
+            }
+        }
+#endif
+        if(idle_time > 0) usleep(idle_time * 1000);
+        else usleep(1000);
     }
 }
 
