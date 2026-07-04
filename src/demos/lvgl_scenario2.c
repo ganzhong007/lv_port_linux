@@ -138,6 +138,41 @@ static void s2_build_segment(lv_obj_t * segment_root, uint32_t seg_id, float seg
     spawn_road_segment(segment_root, seg_base_z);
 }
 
+static bool g_direct_gpu_present;
+static volatile bool g_gpu_frame_pending;
+
+bool lvgl_demos_direct_gpu_present(void)
+{
+    return g_direct_gpu_present;
+}
+
+void lvgl_demos_set_direct_gpu_present(bool enable)
+{
+    g_direct_gpu_present = enable;
+}
+
+bool lvgl_demos_skip_lv_refresh(void)
+{
+    return g_direct_gpu_present && lv_gpu_renderer_has_restorable_viewport();
+}
+
+void lvgl_demos_request_gpu_frame(void)
+{
+    g_gpu_frame_pending = true;
+}
+
+bool lvgl_demos_consume_gpu_frame(void)
+{
+    if(!g_gpu_frame_pending) return false;
+    g_gpu_frame_pending = false;
+    return true;
+}
+
+bool lvgl_demos_gpu_frame_pending(void)
+{
+    return g_gpu_frame_pending;
+}
+
 void lvgl_demos_pre_refresh(uint32_t elapsed_ms)
 {
     if(!g_pool || elapsed_ms == 0) return;
@@ -233,6 +268,35 @@ float lvgl_scenario2_get_min_seg_z(void)
 }
 
 #else
+
+bool lvgl_demos_direct_gpu_present(void)
+{
+    return false;
+}
+
+void lvgl_demos_set_direct_gpu_present(bool enable)
+{
+    LV_UNUSED(enable);
+}
+
+bool lvgl_demos_skip_lv_refresh(void)
+{
+    return false;
+}
+
+void lvgl_demos_request_gpu_frame(void)
+{
+}
+
+bool lvgl_demos_consume_gpu_frame(void)
+{
+    return true;
+}
+
+bool lvgl_demos_gpu_frame_pending(void)
+{
+    return false;
+}
 
 void lvgl_demos_pre_refresh(uint32_t elapsed_ms)
 {

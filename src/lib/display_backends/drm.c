@@ -25,6 +25,12 @@
 #include "../simulator_util.h"
 #include "../simulator_settings.h"
 #include "../backends.h"
+#if LV_USE_DRAW_GPU_RENDERER
+#include "../../demos/lvgl_demos.h"
+
+extern bool lv_linux_drm_gpu_flip_ready(lv_display_t * disp);
+extern bool lv_linux_drm_gpu_present_ex(lv_display_t * disp);
+#endif
 
 /*********************
  *      DEFINES
@@ -112,13 +118,22 @@ static void run_loop_drm(void)
         {
             lv_display_t * disp = lv_display_get_default();
             if(disp) {
-                /* segment_pool / widgets set inv areas in lv_timer_handler above */
-                lv_refr_now(disp);
-                lv_linux_drm_gpu_present(disp);
+                if(!lvgl_demos_skip_lv_refresh()) {
+                    lv_refr_now(disp);
+                    lv_linux_drm_gpu_present(disp);
+                }
+                else if(lvgl_demos_gpu_frame_pending()) {
+                    if(lv_linux_drm_gpu_flip_ready(disp) && lv_linux_drm_gpu_present_ex(disp)) {
+                        lvgl_demos_consume_gpu_frame();
+                    }
+                    else if(!lv_linux_drm_gpu_flip_ready(disp)) {
+                        usleep(500);
+                    }
+                }
             }
         }
 #endif
-        if(idle_time > 0) {
+        if(idle_time > 0 && !lvgl_demos_skip_lv_refresh()) {
             usleep(idle_time * 1000);
         }
     }
