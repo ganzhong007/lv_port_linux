@@ -32,6 +32,7 @@ void lvgl_scenario2_skyline_create(void);
 void lvgl_scenario3_gpu_stress_create(void);
 void lvgl_scenario4_3dbutton_create(void);
 void lvgl_scenario5_stereo_cube_create(void);
+void lvgl_scenario6_stereo_sphere_create(void);
 
 /** Active wireframe mesh count (scenario 3 verify). */
 int lvgl_scenario3_get_mesh_count(void);
@@ -43,6 +44,8 @@ float lvgl_scenario2_get_min_seg_z(void);
 
 /** Current cube yaw in degrees (scenario 5 verify). */
 float lvgl_scenario5_get_yaw_deg(void);
+/** Current sphere yaw in degrees (scenario 6 verify). */
+float lvgl_scenario6_get_yaw_deg(void);
 
 /** Run automated verification; returns 0 on pass. */
 int lvgl_verify_run(int scenario_id);

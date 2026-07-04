@@ -112,6 +112,9 @@ int main(int argc, char ** argv)
     else if(scenario == 5) {
         lvgl_scenario5_stereo_cube_create();
     }
+    else if(scenario == 6) {
+        lvgl_scenario6_stereo_sphere_create();
+    }
     else {
         lvgl_scenario2_skyline_create();
     }
