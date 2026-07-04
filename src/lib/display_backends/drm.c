@@ -112,16 +112,15 @@ static void run_loop_drm(void)
         {
             lv_display_t * disp = lv_display_get_default();
             if(disp) {
-                /* pool_timer_cb runs inside lv_timer_handler above */
-                lv_obj_t * scr = lv_display_get_screen_active(disp);
-                if(scr) lv_obj_invalidate(scr);
+                /* segment_pool / widgets set inv areas in lv_timer_handler above */
                 lv_refr_now(disp);
                 lv_linux_drm_gpu_present(disp);
             }
         }
 #endif
-        if(idle_time > 0) usleep(idle_time * 1000);
-        else usleep(1000);
+        if(idle_time > 0) {
+            usleep(idle_time * 1000);
+        }
     }
 }
 
