@@ -33,6 +33,7 @@ void lvgl_scenario3_gpu_stress_create(void);
 void lvgl_scenario4_3dbutton_create(void);
 void lvgl_scenario5_stereo_cube_create(void);
 void lvgl_scenario6_stereo_sphere_create(void);
+void lvgl_scenario7_video_crop_create(void);
 
 /** Active wireframe mesh count (scenario 3 verify). */
 int lvgl_scenario3_get_mesh_count(void);

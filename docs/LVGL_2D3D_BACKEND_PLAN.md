@@ -1532,7 +1532,8 @@ Clear(α=0) → 3D viewports → 2D OVERLAY batch → SW residual overlay
 
 - Record 阶段不 `glFinish`
 - 每 N 个 batch `glFlush`；**帧末** `glFinish` ×1
-- 静态 scene + 无 dirty → 跳过 3D collect
+- 静态 scene + 无 dirty → 跳过 3D collect（三缓冲下 static-skip 需 `blit_tex_to_tex` 复制上一帧）
+- **持久 scanout FBO**：`lv_gpu_renderer_tex_fbo_bind()` 供 2D/LAYER/blit/3D/verify 复用，减少 `glGenFramebuffer`/`glDeleteFramebuffers`
 
 **能效示意**：
 
@@ -1547,7 +1548,7 @@ energy_cost = w1*draw_calls + w2*fbo_switches + w3*sw_upload_bytes
 |------|------|------|
 | **Phase A** | framegraph 分类 + 硬约束 + AR 模板；evaluate 与 SW 竞争 | 已落地 |
 | **Phase B** | `batch_3d` material merge；`FLUSH_MAX_BATCHES`；静态 scene 跳过 | 已落地 |
-| **Phase C** | `GENERIC` 自动推导 pass；`energy_cost` 调参；`[HW:TILE_COMPOSITOR]` | 部分 / 后续 |
+| **Phase C** | DAG framegraph（6 space pass）、`energy_cost`、LAYER GPU 回贴、UMG pick 默认开启 | 已落地（`[HW:TILE_COMPOSITOR]` 仍为后续） |
 
 **验收表**（`LVGL_VERIFY` + `LVGL_VERIFY_FG=1`，§14）：
 
@@ -1574,7 +1575,7 @@ energy_cost = w1*draw_calls + w2*fbo_switches + w3*sw_upload_bytes
 | 文件 | 职责 |
 |------|------|
 | `lv_gpu_renderer_framegraph.c/.h` | 帧图 record / build / execute |
-| `lv_gpu_renderer_batch_3d.c/.h` | 3D material batch 统计 |
+| `lv_gpu_renderer_batch_3d.c/.h` | 3D material batch 统计（sort 仅 metrics，draw 用 view-depth 排序） |
 | `lv_draw_gpu_renderer.c` | evaluate / dispatch / flush 委托 framegraph |
 | `lv_gpu_renderer_gles2_2d.c` | 2D shader 桶 batch |
 | `lv_gpu_renderer_gles2_3d.c` | viewport pass + AR clear |
@@ -1598,6 +1599,36 @@ sequenceDiagram
     FG->>GPU: execute passes
     GR->>GPU: overlay residual SW fb
 ```
+
+#### 7.7.11 Pass 数量与单 Pass 可行性
+
+**三种「pass」含义**（勿混用）：
+
+| 层级 | 含义 | 数量 |
+|------|------|------|
+| Space 模板 | `lv_gpu_fg_space_t` | 6 enum |
+| 调度 rank | `fg_pass_rank()` execute 顺序 | 5 档（10/20/30/40/50） |
+| 运行时 `fg_pass_count` | `fg_execute` 每 flush 一批 GPU 工作 +1 | 每帧 1～N |
+
+framegraph 外：`overlay_2d_fb()`、static-skip `blit_tex_to_tex()` **不计** `pass_count`。
+
+**典型 `pass_count`**：场景 1 idle ≈1（static blit）；首帧/动画 ≈1（VIEWPORT）；场景 2 NAV ≈2～3；多 viewport + LAYER 更多。
+
+**默认模板**（§7.7.6）：`Clear(α=0) → 3D viewports → 2D OVERLAY → SW residual overlay`。
+
+**能否合成单 pass？**
+
+- 已统一：**单一 dma-buf scanout texture**（非每 widget 一张 RT）。
+- **不能**在保持 AR 透明、LAYER 两阶段、SW fallback、三缓冲 static-skip 的前提下把 `pass_count` 恒定为 1。
+- 合理模型：**同一 scanout texture 上的多次有序 sub-pass**（3D → 2D rank → LAYER → overlay）。
+
+**减 pass / 减 FBO 开销（§5 优先级）**：
+
+1. **已做**：`lv_gpu_renderer_tex_fbo_bind()` — 2D batch / LAYER / blit / 3D viewport / verify 共用持久 FBO，避免每 pass `glGenFramebuffer`。
+2. **中风险**：HUD 全走 gpu_renderer OVERLAY，跳过 `overlay_2d_fb`。
+3. **高风险**：depth + 全局排序（需重定 AR/VERIFY）。
+
+> **实现解读**（gpu_renderer 模块、DAG framegraph、DMA-BUF present、UMG pick、MVP）：见 **§15**。
 
 ### 7.6 像素格式：RGBA8888 / RGBA5551 / RGB565 等（修订）
 
@@ -2085,5 +2116,216 @@ cmake --build build-vgl-glfw -j
 | `ImportError: lz4` / 测试资源解压失败 | `pip3 install lz4` |
 | 无显示器 / SSH 无 X11 | 使用 `xvfb-run -a` 包裹测试命令 |
 | `run_lvgl_gpu_renderer_tests: install ruby` | 同上 |
+
+---
+
+## 15. 实现解读附录（gpu_renderer / framegraph / 呈现）
+
+> **用途**：把 Phase 1 MVP 已落地代码与设计文档 §7 的对应关系写清楚，便于 onboard 与后续 Phase C 扩展。  
+> **代码路径**：`lvgl/src/draw/gpu_renderer/`、`lvgl/src/drivers/display/drm/lv_linux_drm_egl.c`。
+
+### 15.1 术语：MVP
+
+**MVP** = *Minimum Viable Product*（最小可行产品）：用尽量少的功能做出能编译、上板、跑通验收场景的版本。
+
+| 维度 | 在本项目中的含义 |
+|------|------------------|
+| **Minimum** | 完整 DAG framegraph（6 `lv_gpu_fg_space_t` pass）、静态 scene 跳过、`energy_cost`、LAYER GPU 回贴；`[HW:TILE_COMPOSITOR]` 仍不做 |
+| **Viable** | 场景 1–6、`LVGL_VERIFY`、板端 ~60fps @ 1080p（mono wireframe bench） |
+| **Product** | 智能眼镜 AR 2D/3D 混合渲染通路可演示、可回归 |
+
+文档 §7.7.8 中 **Phase A/B/C 已落地**（除 `[HW:TILE_COMPOSITOR]`）；MVP 指可验收的 AR 2D/3D 混合通路，而非「简化 framegraph」。
+
+### 15.2 `gpu_renderer/` 模块职责
+
+`lv_draw_gpu_renderer` 是 LVGL **Draw Unit**（ID=11），与 `lv_opengles_*` 驱动层配合，负责 **OpenGL ES 2 混合合成**。
+
+```mermaid
+flowchart TB
+    subgraph record [Record — lv_refr dispatch]
+        A[evaluate 打分]
+        B[dispatch 入队]
+    end
+    subgraph fg [framegraph DAG execute]
+        C[Clear + 3D VIEWPORT pass]
+        D[2D SCREEN / OVERLAY batch]
+        L[LAYER composite]
+    end
+    subgraph present [Display flush]
+        E[overlay_2d_fb SW 残余]
+        F[DMA-BUF atomic present]
+    end
+    A --> B --> C --> D --> E --> F
+```
+
+| 文件 | 职责 |
+|------|------|
+| `lv_draw_gpu_renderer.c/.h` | Draw Unit 注册；`flush_3d` / `overlay_2d_*` / `present_tex_*` / verify 统计；对外 API |
+| `lv_gpu_renderer_framegraph.c/.h` | **DAG 帧图**：Record（viewport / 2D / LAYER 节点）→ Build（space pass 排序）→ Execute（静态 3D 跳过 + `energy_cost`） |
+| `lv_gpu_renderer_gles2_3d.c/.h` | 3D：box / 圆角 shaded box / UV sphere 线框 / plane snapshot；opaque **material batch 排序** |
+| `lv_gpu_renderer_gles2_2d.c/.h` | 2D GPU batch（fill/border/label/image）；复杂 task SW raster → 纹理 quad |
+| `lv_gpu_renderer_batch_3d.c/.h` | 3D opaque 按 material kind 排序 — **参与 draw 与 `material_batches` 统计** |
+| `lv_gpu_renderer_caps.c/.h` | GLES/FBO/max_texture 探测；context 就绪后触发 gles2_2d/3d init |
+
+**依赖关系**：
+
+```
+lv_draw_gpu_renderer.c
+  ├── lv_gpu_renderer_framegraph.c
+  │     ├── lv_gpu_renderer_gles2_3d.c
+  │     ├── lv_gpu_renderer_gles2_2d.c
+  │     └── lv_gpu_renderer_batch_3d.c
+  └── lv_gpu_renderer_caps.c
+```
+
+### 15.3 Framegraph：设计 vs 当前实现
+
+#### 15.3.1 设计目标（§7.5 / §7.7）
+
+完整 framegraph 为 **Record → Build → Execute → Finish** 四段；节点带 `space` / `kind` / `deps` / `shader_key`，Build 阶段拓扑排序 + 合批。Pass 模板默认：
+
+```
+Clear(α=0) → 3D viewports → 2D OVERLAY batch → SW residual overlay
+```
+
+#### 15.3.2 当前实现：DAG framegraph（Phase C）
+
+**Record → Build → Execute** 三段；节点 `lv_gpu_fg_node_t` 带 `space` / `kind` / `z_key` / `shader_key` / `pixel_area`：
+
+| kind | space | Record API |
+|------|-------|------------|
+| `VIEWPORT` | `VIEWPORT_3D` | `fg_record_viewport()` |
+| `2D` | `SCREEN` / `OVERLAY` / `FULLSCREEN_APP` | `fg_queue_2d_task()` + `fg_record_2d_task()` |
+| `LAYER` | `LAYER` | `fg_record_layer_task()` |
+
+**Build**（`fg_build()`）：按 pass rank 排序 — `VIEWPORT_3D` → `SCREEN` → `OVERLAY` → `LAYER` → `FULLSCREEN_APP`；同 pass 内按 `z_key` + `record_index`。
+
+**Execute**（`fg_execute()`）：
+
+1. 若 `node_count==0` → `fg_restore_last_viewport()`（direct present 动画，场景 5/6）
+2. 遍历排序节点；2D 按 space 分段 batch → `gles2_2d_render_cmd_list`
+3. VIEWPORT：静态 scene（无 volatile mesh + camera 未 dirty）→ **跳过 GL draw**，保留 `g_vp_last`
+4. LAYER：`lv_gpu_renderer_composite_layer_to_tex()` GPU 回贴子层 `draw_buf`
+5. 统计 `energy_cost`；保存 `g_vp_last`；`glFlush`；restore default FBO
+
+**UI mode 模板**（`fg_space_enabled()`）：`APP_FULLSCREEN` 仅 SCREEN+FULLSCREEN；`WIREFRAME_BENCH` 仅 3D viewport；`AR_LAUNCHER`/`NAV_AR` 排除 FULLSCREEN_APP。
+
+**仍简化之处**：无显式 `deps` 边与多 RT；`PLANE_3D` space 预留未单独 pass。
+
+#### 15.3.3 与 DRM present 的一帧时序（场景 5/6 turbo）
+
+```
+timer/direct present
+  → lv_linux_drm_gpu_present_ex()
+  → lv_gpu_renderer_flush_3d()     // framegraph execute → dma-buf texture
+  → [可选] overlay_2d_fb           // 场景 5/6 通常关闭
+  → glFlush / glFinish
+  → drm_egl_present_fb(fb_id)      // atomic 改 plane FB_ID，见 §15.5
+```
+
+### 15.4 「规划期 enum/API 未接线」
+
+指：**头文件/文档里已命名，但 `.c` 中尚无完整行为**。Phase C 后大部分已接线；下表为 **仍预留** 项：
+
+| 符号 | 状态 |
+|------|------|
+| `lv_gpu_fg_space_t` `PLANE_3D` | 枚举存在；无独立 pass（plane 走 VIEWPORT_3D collect） |
+| `LV_GPU_PATH_SW_DIRECT` | evaluate 不接管离屏 layer（score=0，SW 直绘） |
+| `lv_gpu_renderer_verify_alpha()` | 已实现，**无调用方**；verify 用 `verify_stats()` |
+| `depth_rb`（`gles2_render_viewport` 参数） | 恒传 0；GL 侧 `glDisable(DEPTH_TEST)` |
+| `[HW:TILE_COMPOSITOR]` | 文档规划，无实现 |
+
+**已接线（Phase C）**：
+
+| 符号 | 行为 |
+|------|------|
+| `lv_gpu_fg_space_t` 六 space | `fg_space_enabled()` + Build pass rank |
+| `LV_GPU_PATH_2D_RASTER` | evaluate score=35；dispatch queue+record label/image |
+| `LV_GPU_PATH_DEFER_LAYER` | evaluate + `composite_layer_to_tex` |
+| `LV_GPU_UI_MODE_*` | framegraph pass 模板 + 3D clear 色 |
+| `batch_3d_sort_opaque` | **参与** `render_viewport_draw` 与 stats |
+| 静态 scene 跳过 | `lv_3d_scene_has_volatile_meshes` + camera dirty |
+| `energy_cost` | `fg_compute_energy()` → `fg_energy_cost` / verify stats |
+| UMG pick | `lv_3dviewport` 默认 `input_route=true` |
+
+**平台 dormant path**（非逻辑废弃，板端 EGL 不走）：MSAA FBO（`#if !LV_USE_EGL`）、`glBlitFramebuffer` present、`present_tex_readback`（GLFW VM fallback）。
+
+**与「废弃代码」区别**：`patches/` 下旧名 `gpu_composite`、`src/main copy*.c` 等本地备份才是应忽略/不提交的垃圾；上述 enum 是 **刻意预留**。
+
+### 15.5 DMA-BUF present：像素从哪到哪
+
+#### 15.5.1 Zero-copy 路径（`dmabuf_scanout_ok=true`，Mali 板端默认）
+
+初始化：`DRM_DMABUF_SCANOUT_BUFS`（通常 3）块 GBM BO，`GBM_BO_USE_SCANOUT | GBM_BO_USE_RENDERING`：
+
+```
+gbm_bo_create → drmModeAddFB2(fb_id)
+             → eglCreateImageKHR(EGL_LINUX_DMA_BUF_EXT)
+             → glEGLImageTargetTexture2DOES → texture_id
+```
+
+`drm_dmabuf_bind_render_target()` 将 **当前 render_idx 的 texture** 设为 LVGL display 纹理 → **framegraph 直接写入该 dma-buf 显存**。
+
+**Present 不做像素拷贝**，只做 KMS **Atomic 改 Primary Plane 的 `FB_ID`**：
+
+```
+Mali 写入 dmabuf_bufs[i]  ──同一块物理内存──►  Display Engine 扫描 → DP 面板
+```
+
+帧末轮换：`present_idx` 上屏 → `render_idx = (present_idx+1) % count` → 绑定下一块为渲染目标（三缓冲防 EBUSY）。
+
+环境变量：`LVGL_DRM_DMABUF_SCANOUT=1`（默认期望开启）；`LVGL_DRM_TURBO=1` 时 present 前 `glFlush` 代替 `glFinish`。
+
+#### 15.5.2 Fallback：确有 CPU/GPU 读回拷贝
+
+| 路径 | 从 | 到 | 方式 |
+|------|----|----|------|
+| Readback | 普通 GL display texture | `scanout_bo` | `glReadPixels` + `gbm_bo_map` 写入 |
+| 格式不一致 | GBM surface BO | `scanout_bo` | `drm_copy_gbm_bo_to_scanout` CPU 拷贝/转换 |
+
+Fallback 后仍 `drm_egl_present_fb(scanout_fb_id)`，但 **每帧多一次全屏读回**，1080p 下显著慢于 zero-copy。
+
+#### 15.5.3 与 framegraph / overlay 的关系
+
+- **3D + GPU 2D**：均在 framegraph execute 内写入 **当前 dma-buf texture**。
+- **`overlay_2d_fb`**：SW `fb1` 上传纹理后 GPU blend 进 **同一张 texture**（非另开 scanout BO）。
+- **Present**：仅 flip plane 指针，不搬像素。
+
+GPU composite 路径 **不依赖** `eglSwapBuffers` 出帧；由 `lv_linux_drm_gpu_present_ex()` 在 main loop / direct present 中显式调用（见 `lv_linux_drm_egl.c` flush_cb 注释）。
+
+### 15.6 UMG pick（3D 交互）
+
+**UMG** = Unreal Motion Graphics；**pick** = 屏幕指针 → **相机射线** → 命中 3D 场景中的 mesh/widget（对应 UE 的 `Widget Interaction Component` + line trace；Unity 的 `GraphicRaycaster` 2D 版）。
+
+设计映射（§2.6.3）：
+
+| Unreal | 本设计 |
+|--------|--------|
+| line trace 命中 widget | `lv_3dviewport_pick_at(x,y)` → `lv_3d_pick_scene` |
+| UMG 焦点链 | 命中 → `lv_indev` 注入 pointer → `lv_group` / event 冒泡 |
+
+**已实现 API**（`lvgl/src/widgets/3d/lv_3dviewport.c`）：
+
+```c
+void lv_3dviewport_set_pickable(lv_obj_t * vp, bool en);
+void lv_3dviewport_set_input_routing(lv_obj_t * vp, bool en);
+lv_obj_t * lv_3dviewport_pick_at(lv_obj_t * vp, int32_t x, int32_t y);
+lv_obj_t * lv_3dviewport_pick_obj(lv_obj_t * vp, lv_point3d_t origin, lv_vec3_t dir);
+```
+
+`lv_3dbutton` 通过 viewport pick 实现 hover/press。构造函数默认 **`input_route=true` + `pickable=true`**（可 `set_input_routing(false)` 关闭）。
+
+**与 framegraph 关系**：pick 属 **输入路径**，不参与 Record/Execute；仅在 indev 事件时做射线检测。
+
+### 15.7 文档与代码对照速查
+
+| 话题 | 设计章节 | 主要源码 |
+|------|----------|----------|
+| Framegraph pass 顺序 | §7.5、§7.7 | `lv_gpu_renderer_framegraph.c` |
+| UI mode | §7.5 表 | `pass_3d_enabled()` / `gles2_3d` clear 色 |
+| AR α=0 | §7.4 | `LV_GPU_RENDERER_AR_PASSTHROUGH` |
+| DMA-BUF | §2.8、§13 | `lv_linux_drm_egl.c` `drm_dmabuf_*` |
+| UMG pick | §2.6.3 | `lv_3dviewport.c`、`lv_3dbutton.c` |
+| 场景 5/6 direct present | §7.7 + 本附录 §15.3.3 | `lvgl_scenario5/6.c`、`g_vp_last` |
 
 ---

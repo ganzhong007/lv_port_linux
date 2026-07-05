@@ -166,8 +166,15 @@ static int verify_gpu_path(const lv_gpu_renderer_verify_stats_t * s)
     return 1;
 }
 
+static int verify_lite_mode(void)
+{
+    return lv_gpu_renderer_verify_lite_enabled() ? 1 : 0;
+}
+
 static int verify_frame_content(int frame_idx, const lv_gpu_renderer_verify_stats_t * s)
 {
+    const int lite = verify_lite_mode();
+
     if(s->last_flush_viewports < 1) {
         printf("LVGL_VERIFY: FAIL scenario=%d frame=%d no viewport flush\n", scenario_id, frame_idx);
         return 0;
@@ -184,7 +191,7 @@ static int verify_frame_content(int frame_idx, const lv_gpu_renderer_verify_stat
                    scenario_id, frame_idx, (unsigned)s->region_max_alpha, (unsigned)s->flush_max_alpha);
             return 0;
         }
-        if(s->region_greenish_count < 1 && s->region_visible_count < 8) {
+        if(s->region_greenish_count < 1 && s->region_visible_count < (lite ? 2u : 8u)) {
             printf("LVGL_VERIFY: FAIL scenario=%d frame=%d greenish=%u visible=%u flush_max=%u\n",
                    scenario_id, frame_idx,
                    (unsigned)s->region_greenish_count, (unsigned)s->region_visible_count,
@@ -205,13 +212,13 @@ static int verify_frame_content(int frame_idx, const lv_gpu_renderer_verify_stat
                    scenario_id, frame_idx, (unsigned)s->region_max_alpha, (unsigned)s->flush_max_alpha);
             return 0;
         }
-        if(s->region_opaque_count < 32) {
+        if(s->region_opaque_count < (lite ? 4u : 32u)) {
             printf("LVGL_VERIFY: FAIL scenario=%d frame=%d opaque=%u colorful=%u\n",
                    scenario_id, frame_idx,
                    (unsigned)s->region_opaque_count, (unsigned)s->region_colorful_count);
             return 0;
         }
-        if(s->region_colorful_count < 32) {
+        if(s->region_colorful_count < (lite ? 4u : 32u)) {
             printf("LVGL_VERIFY: FAIL scenario=%d frame=%d colorful=%u (expect colored tiles)\n",
                    scenario_id, frame_idx, (unsigned)s->region_colorful_count);
             return 0;
@@ -232,7 +239,7 @@ static int verify_frame_content(int frame_idx, const lv_gpu_renderer_verify_stat
                    scenario_id, frame_idx, (unsigned)s->region_max_alpha, (unsigned)s->flush_max_alpha);
             return 0;
         }
-        if(s->region_visible_count < 8) {
+        if(s->region_visible_count < (lite ? 2u : 8u)) {
             printf("LVGL_VERIFY: FAIL scenario=%d frame=%d visible=%u (expect wireframe pixels)\n",
                    scenario_id, frame_idx, (unsigned)s->region_visible_count);
             return 0;
@@ -251,7 +258,7 @@ static int verify_frame_content(int frame_idx, const lv_gpu_renderer_verify_stat
                    scenario_id, frame_idx, (unsigned)s->region_max_alpha);
             return 0;
         }
-        if(s->region_bluish_count < 4) {
+        if(s->region_bluish_count < (lite ? 1u : 4u)) {
             printf("LVGL_VERIFY: FAIL scenario=%d frame=%d bluish=%u (expect blue button pixels)\n",
                    scenario_id, frame_idx, (unsigned)s->region_bluish_count);
             return 0;
@@ -313,8 +320,8 @@ static void verify_one_frame(lv_display_t * disp)
 #endif
     }
 
-    if(stats.corner_min_alpha > 10 && scenario_id != 4 && scenario_id != 1) {
-        /* Scenario 1: full-viewport sky backdrop — corners are opaque blue, not AR clear. */
+    if(stats.corner_min_alpha > 10 && scenario_id != 1 && scenario_id != 3 && scenario_id != 4) {
+        /* Scenario 1/3: opaque viewport backdrop; 4: opaque UI chrome. */
         printf("LVGL_VERIFY: FAIL scenario=%d frame=%d corner_min_alpha=%u (expect ~0 AR passthrough)\n",
                scenario_id, frame_idx, (unsigned)stats.corner_min_alpha);
         verify_done = 1;
@@ -427,8 +434,10 @@ int lvgl_verify_run(int id)
     frames_to_check = env_int("LVGL_VERIFY_FRAMES", 60);
     if(frames_to_check < 1) frames_to_check = 1;
 
-    printf("LVGL_VERIFY: start scenario=%d warmup=%d frames=%d\n",
-           scenario_id, warmup_left, frames_to_check);
+    printf("LVGL_VERIFY: start scenario=%d warmup=%d frames=%d lite=%d samples=%u\n",
+           scenario_id, warmup_left, frames_to_check,
+           verify_lite_mode(),
+           (unsigned)(verify_lite_mode() ? (8u * 5u + 9u) : (48u * 27u + 9u)));
 
     lv_gpu_renderer_set_frame_ready_cb(verify_frame_cb);
     lv_timer_create(verify_timer_cb, 16, NULL);

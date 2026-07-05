@@ -115,6 +115,9 @@ int main(int argc, char ** argv)
     else if(scenario == 6) {
         lvgl_scenario6_stereo_sphere_create();
     }
+    else if(scenario == 7) {
+        lvgl_scenario7_video_crop_create();
+    }
     else {
         lvgl_scenario2_skyline_create();
     }
