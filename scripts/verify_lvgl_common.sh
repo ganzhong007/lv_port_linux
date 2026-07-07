@@ -30,9 +30,14 @@ lvgl_verify_run() {
 
   local bin="$build/bin/lvglsim"
   if [[ ! -x "$bin" ]]; then
-    echo "verify: configuring $config -> $build"
-    cmake -B "$build" -DCONFIG="$config" "$root"
-    cmake --build "$build" -j"$(nproc)"
+    if [[ "$backend" == glfw ]]; then
+      echo "verify: building host glfw -> $build"
+      LVGL_BUILD_DIR="$build" "$_LVGL_SCRIPT_DIR/build_glfw.sh"
+    else
+      echo "verify: configuring $config -> $build"
+      cmake -B "$build" -DCONFIG="$config" "$root"
+      cmake --build "$build" -j"$(nproc)"
+    fi
   fi
 
   export LVGL_SCENARIO="$scenario"
