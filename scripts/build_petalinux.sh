@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Cross-build lvglsim for PetaLinux AArch64.
 #
+# Host x86_64 dev build (GLFW sim): ./scripts/build_glfw.sh
+#
 # Configs:
 #   petalinux-a53-drm-gpu  — DRM/EGL + Mali gpu_renderer + 4 scenarios (default)
 #   petalinux-a53-fbdev    — software fbdev fallback

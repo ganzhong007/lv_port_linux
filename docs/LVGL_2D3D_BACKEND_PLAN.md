@@ -2081,22 +2081,32 @@ xvfb-run -a ./tests/main.py --build-options OPTIONS_TEST_GPU_RENDERER \
 与官方单元测试互补，覆盖完整 demo 与 `LVGL_VERIFY`（§7.7 验收表）：
 
 ```sh
-./scripts/verify_all_scenarios.sh   # 场景 1–4 一键
+./scripts/verify_all_scenarios.sh   # 场景 1–7 一键
 ./scripts/verify_scenario1.sh   # AR 九宫格
 ./scripts/verify_scenario2.sh   # NAV AR
 ./scripts/verify_scenario3.sh   # 3D stress
 ./scripts/verify_scenario4.sh   # 3D button
+./scripts/verify_scenario5.sh   # 线框立方体 + yaw 旋转
+./scripts/verify_scenario6.sh   # 线框球体 + yaw 旋转
+./scripts/verify_scenario7.sh   # Even UX 侧视 panel 动画
+
+./scripts/verify_pass_simplify.sh   # Scenario 2 unified pass 离屏验收
+./scripts/run_pass_simplify_visual.sh   # Scenario 2 有窗口预览
 
 # Wayland 后端
 LVGL_BACKEND=wayland ./scripts/verify_scenario_wayland.sh
 ```
 
-需先构建 `lvglsim`，例如：
+需先构建 `lvglsim`（主机 x86 推荐 `build_glfw.sh`，避免 PetaLinux SDK 污染交叉环境）：
 
 ```sh
+./scripts/build_glfw.sh
+# 或
 cmake -B build-vgl-glfw -DCONFIG=lvgl2d3dbackend-glfw
 cmake --build build-vgl-glfw -j
 ```
+
+PetaLinux 板端交叉编译见 `./scripts/build_petalinux.sh`。
 
 ### 14.5 两套测试对比
 
@@ -2105,7 +2115,7 @@ cmake --build build-vgl-glfw -j
 | 位置 | `lvgl/tests/` | `scripts/` + `src/demos/lvgl_verify.c` |
 | 框架 | Unity + `main.py` | 环境变量 + 进程退出码 |
 | 显示 | 隐藏 GLFW 窗口 | `lvglsim` + xvfb（glfw）或 Wayland |
-| 覆盖 | 3D 按钮 + framegraph 统计 | 场景 1–4 全帧验证 |
+| 覆盖 | 3D 按钮 + framegraph 统计 | 场景 1–7 全帧验证（像素 + fg/gpu_path） |
 
 ### 14.6 常见问题
 
@@ -2163,7 +2173,9 @@ flowchart TB
 | `lv_draw_gpu_renderer.c/.h` | Draw Unit 注册；`flush_3d` / `overlay_2d_*` / `present_tex_*` / verify 统计；对外 API |
 | `lv_gpu_renderer_framegraph.c/.h` | **DAG 帧图**：Record（viewport / 2D / LAYER 节点）→ Build（space pass 排序）→ Execute（静态 3D 跳过 + `energy_cost`） |
 | `lv_gpu_renderer_gles2_3d.c/.h` | 3D：box / 圆角 shaded box / UV sphere 线框 / plane snapshot；opaque **material batch 排序** |
-| `lv_gpu_renderer_gles2_2d.c/.h` | 2D GPU batch（fill/border/label/image）；复杂 task SW raster → 纹理 quad |
+| `lv_gpu_renderer_gles2_2d.c/.h` | 2D GPU batch（fill/border/label/image/vector）；`prog_img` 矩阵变换；`lv_gpu_glyph_atlas` SDF 字形；复杂 task SW raster → 纹理 quad |
+| `lv_gpu_renderer_glyph_atlas.c/.h` | 动态 A8→SDF atlas + `prog_glyph` smoothstep |
+| `lv_gpu_renderer_layer.c/.h` | 子层 FBO/纹理；cmd 队列 + flush；offscreen layer evaluate 优先（score=5） |
 | `lv_gpu_renderer_batch_3d.c/.h` | 3D opaque 按 material kind 排序 — **参与 draw 与 `material_batches` 统计** |
 | `lv_gpu_renderer_caps.c/.h` | GLES/FBO/max_texture 探测；context 就绪后触发 gles2_2d/3d init |
 
@@ -2205,7 +2217,7 @@ Clear(α=0) → 3D viewports → 2D OVERLAY batch → SW residual overlay
 1. 若 `node_count==0` → `fg_restore_last_viewport()`（direct present 动画，场景 5/6）
 2. 遍历排序节点；2D 按 space 分段 batch → `gles2_2d_render_cmd_list`
 3. VIEWPORT：静态 scene（无 volatile mesh + camera 未 dirty）→ **跳过 GL draw**，保留 `g_vp_last`
-4. LAYER：`lv_gpu_renderer_composite_layer_to_tex()` GPU 回贴子层 `draw_buf`
+4. LAYER：`lv_gpu_renderer_composite_layer_to_tex()` — GPU FBO 子层纹理或 CPU `draw_buf` 上传，经 `prog_img` 应用 rotation/scale/skew 后回贴
 5. 统计 `energy_cost`；保存 `g_vp_last`；`glFlush`；restore default FBO
 
 **UI mode 模板**（`fg_space_enabled()`）：`APP_FULLSCREEN` 仅 SCREEN+FULLSCREEN；`WIREFRAME_BENCH` 仅 3D viewport；`AR_LAUNCHER`/`NAV_AR` 排除 FULLSCREEN_APP。

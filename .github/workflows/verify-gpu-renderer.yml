@@ -26,10 +26,10 @@ jobs:
 
       - name: Build lvglsim (lvgl2d3dbackend-glfw)
         run: |
-          cmake -B build-vgl-glfw -DCONFIG=lvgl2d3dbackend-glfw -DCMAKE_BUILD_TYPE=Release
-          cmake --build build-vgl-glfw -j"$(nproc)" lvglsim
+          chmod +x scripts/build_glfw.sh
+          ./scripts/build_glfw.sh
 
-      - name: Run scenario verification
+      - name: Run scenario verification (1–7)
         run: |
           chmod +x scripts/verify_all_scenarios.sh scripts/verify_scenario*.sh
           ./scripts/verify_all_scenarios.sh
