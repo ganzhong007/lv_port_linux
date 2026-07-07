@@ -50,6 +50,10 @@ float lvgl_scenario5_get_yaw_deg(void);
 /** Current sphere yaw in degrees (scenario 6 verify). */
 float lvgl_scenario6_get_yaw_deg(void);
 
+void lvgl_scenario8_gpu2d_edges_create(void);
+/** Glyph atlas overflow count (scenario 8 verify). */
+uint32_t lvgl_scenario8_get_glyph_overflow_count(void);
+
 /** Run automated verification; returns 0 on pass. */
 int lvgl_verify_run(int scenario_id);
 

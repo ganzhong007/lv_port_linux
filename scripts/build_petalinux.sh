@@ -4,7 +4,7 @@
 # Host x86_64 dev build (GLFW sim): ./scripts/build_glfw.sh
 #
 # Configs:
-#   petalinux-a53-drm-gpu  — DRM/EGL + Mali gpu_renderer + 4 scenarios (default)
+#   petalinux-a53-drm-gpu  — DRM/EGL + Mali gpu_renderer + scenarios 1–8 (default)
 #   petalinux-a53-fbdev    — software fbdev fallback
 #
 # Usage:
@@ -65,7 +65,7 @@ echo ""
 if [[ "$CONFIG" == *drm-gpu* ]]; then
     echo "On board (after Mali is up):"
     echo "  ./scripts/start_mali_gpu.sh"
-    echo "  LVGL_SCENARIO=4 ./lvglsim -b drm"
+    echo "  LVGL_SCENARIO=8 ./lvglsim -b drm   # GPU 2D edge-case demo (needs DejaVuSans on target for outline)"
 else
     echo "On board:"
     echo "  ./lvglsim -b fbdev -W 800 -H 480"

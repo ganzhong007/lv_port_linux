@@ -182,8 +182,32 @@ static int verify_fg_framegraph(const lv_gpu_renderer_verify_stats_t * s)
                 return 0;
             }
             break;
+        case 8:
+            if(s->fg_pass_count < 1 || s->fg_pass_count > 2) {
+                printf("LVGL_VERIFY: FAIL fg scenario=8 pass_count=%u (expect 1..2 pure 2D)\n",
+                       (unsigned)s->fg_pass_count);
+                return 0;
+            }
+            if(s->gpu_3d_draws != 0) {
+                printf("LVGL_VERIFY: FAIL fg scenario=8 gpu_3d_draws=%u (expect 0)\n",
+                       (unsigned)s->gpu_3d_draws);
+                return 0;
+            }
+            break;
         default:
             break;
+    }
+    return 1;
+}
+
+static int verify_sw_raster_zero(const lv_gpu_renderer_verify_stats_t * s)
+{
+    if(!env_bool("LVGL_VERIFY_SW_RASTER", 1)) return 1;
+
+    if(s->sw_2d_raster_tasks != 0) {
+        printf("LVGL_VERIFY: FAIL scenario=%d sw_raster=%u (expect 0, no SW 2D raster fallback)\n",
+               scenario_id, (unsigned)s->sw_2d_raster_tasks);
+        return 0;
     }
     return 1;
 }
@@ -227,6 +251,23 @@ static int verify_gpu_path(const lv_gpu_renderer_verify_stats_t * s)
             return 0;
         }
     }
+    if(scenario_id == 8) {
+        if(s->sw_overlay_uploads != 0) {
+            printf("LVGL_VERIFY: FAIL gpu_path scenario=8 sw_overlay=%u (expect 0)\n",
+                   (unsigned)s->sw_overlay_uploads);
+            return 0;
+        }
+        if(s->gpu_2d_tasks < 4) {
+            printf("LVGL_VERIFY: FAIL gpu_path scenario=8 gpu_2d_tasks=%u (expect >=4)\n",
+                   (unsigned)s->gpu_2d_tasks);
+            return 0;
+        }
+        if(s->gpu_3d_draws != 0) {
+            printf("LVGL_VERIFY: FAIL gpu_path scenario=8 gpu_3d_draws=%u (expect 0)\n",
+                   (unsigned)s->gpu_3d_draws);
+            return 0;
+        }
+    }
     return 1;
 }
 
@@ -239,7 +280,7 @@ static int verify_frame_content(int frame_idx, const lv_gpu_renderer_verify_stat
 {
     const int lite = verify_lite_mode();
 
-    if(s->last_flush_viewports < 1) {
+    if(s->last_flush_viewports < 1 && scenario_id != 8) {
         printf("LVGL_VERIFY: FAIL scenario=%d frame=%d no viewport flush\n", scenario_id, frame_idx);
         return 0;
     }
@@ -370,6 +411,20 @@ static int verify_frame_content(int frame_idx, const lv_gpu_renderer_verify_stat
         return 1;
     }
 
+    if(scenario_id == 8) {
+        if(s->region_max_alpha < 128) {
+            printf("LVGL_VERIFY: FAIL scenario=8 frame=%d max_alpha=%u (expect opaque panels)\n",
+                   frame_idx, (unsigned)s->region_max_alpha);
+            return 0;
+        }
+        if(s->region_colorful_count < (lite ? 4u : 12u)) {
+            printf("LVGL_VERIFY: FAIL scenario=8 frame=%d colorful=%u visible=%u\n",
+                   frame_idx, (unsigned)s->region_colorful_count, (unsigned)s->region_visible_count);
+            return 0;
+        }
+        return 1;
+    }
+
     printf("LVGL_VERIFY: FAIL scenario=%d frame=%d (unknown scenario)\n", scenario_id, frame_idx);
     return 0;
 }
@@ -396,9 +451,15 @@ static void verify_one_frame(lv_display_t * disp)
         exit(1);
     }
 
-    if(stats.last_flush_items < 1) {
+    if(stats.last_flush_items < 1 && scenario_id != 8) {
         printf("LVGL_VERIFY: FAIL scenario=%d frame=%d no 3D draw (warmup too short?)\n",
                scenario_id, frame_idx);
+        verify_done = 1;
+        exit(1);
+    }
+
+    if(scenario_id == 8 && stats.gpu_2d_tasks < 1) {
+        printf("LVGL_VERIFY: FAIL scenario=8 frame=%d no GPU 2D batch (warmup too short?)\n", frame_idx);
         verify_done = 1;
         exit(1);
     }
@@ -425,7 +486,7 @@ static void verify_one_frame(lv_display_t * disp)
     }
 
     if(stats.corner_min_alpha > 10 && scenario_id != 1 && scenario_id != 3 && scenario_id != 4
-       && scenario_id != 5 && scenario_id != 6 && scenario_id != 7) {
+       && scenario_id != 5 && scenario_id != 6 && scenario_id != 7 && scenario_id != 8) {
         /* Scenario 1/3/4/5/6/7: opaque viewport or wireframe on transparent scr. */
         printf("LVGL_VERIFY: FAIL scenario=%d frame=%d corner_min_alpha=%u (expect ~0 AR passthrough)\n",
                scenario_id, frame_idx, (unsigned)stats.corner_min_alpha);
@@ -434,6 +495,11 @@ static void verify_one_frame(lv_display_t * disp)
     }
 
     if(!verify_frame_content(frame_idx, &stats)) {
+        verify_done = 1;
+        exit(1);
+    }
+
+    if(!verify_sw_raster_zero(&stats)) {
         verify_done = 1;
         exit(1);
     }
@@ -550,9 +616,19 @@ static void verify_one_frame(lv_display_t * disp)
             printf("LVGL_VERIFY: scenario7 animation ok anim_ms=%u -> %u\n",
                    (unsigned)s7_anim_first, (unsigned)s7_anim_last);
         }
+        if(scenario_id == 8) {
+            const uint32_t overflow = lvgl_scenario8_get_glyph_overflow_count();
+            if(overflow < 1) {
+                printf("LVGL_VERIFY: FAIL scenario=8 glyph_overflow=%u (expect >=1 atlas overflow path)\n",
+                       (unsigned)overflow);
+                verify_done = 1;
+                exit(1);
+            }
+            printf("LVGL_VERIFY: scenario8 glyph_overflow ok count=%u\n", (unsigned)overflow);
+        }
         printf("LVGL_VERIFY: PASS scenario=%d checked_frames=%d seen_frames=%d samples_per_frame=%u\n",
                scenario_id, frames_to_check, frames_seen, (unsigned)stats.region_samples);
-        if(env_bool("LVGL_VERIFY_GPU_PATH", (scenario_id == 2 || scenario_id == 5 || scenario_id == 6 || scenario_id == 7) ? 1 : 0)) {
+        if(env_bool("LVGL_VERIFY_GPU_PATH", (scenario_id == 2 || scenario_id == 5 || scenario_id == 6 || scenario_id == 7 || scenario_id == 8) ? 1 : 0)) {
             printf("LVGL_VERIFY: gpu_path PASS scenario=%d\n", scenario_id);
         }
         if(env_bool("LVGL_VERIFY_FG", 1)) {

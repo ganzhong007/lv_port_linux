@@ -440,6 +440,10 @@ add_executable(lvglsim
     src/demos/lvgl_scenario5.c
     src/demos/lvgl_scenario6.c
     src/demos/lvgl_scenario7.c
+    src/demos/lvgl_scenario8.c
+    src/demos/s8_argb_mask.c
+    src/demos/s8_arc_img.c
+    src/demos/s8_diff_img.c
     src/demos/lvgl_verify.c
 )
 

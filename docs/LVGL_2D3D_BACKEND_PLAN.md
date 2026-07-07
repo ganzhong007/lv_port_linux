@@ -2081,7 +2081,7 @@ xvfb-run -a ./tests/main.py --build-options OPTIONS_TEST_GPU_RENDERER \
 与官方单元测试互补，覆盖完整 demo 与 `LVGL_VERIFY`（§7.7 验收表）：
 
 ```sh
-./scripts/verify_all_scenarios.sh   # 场景 1–7 一键
+./scripts/verify_all_scenarios.sh   # 场景 1–8 一键（主机 glfw + xvfb）
 ./scripts/verify_scenario1.sh   # AR 九宫格
 ./scripts/verify_scenario2.sh   # NAV AR
 ./scripts/verify_scenario3.sh   # 3D stress
@@ -2089,6 +2089,11 @@ xvfb-run -a ./tests/main.py --build-options OPTIONS_TEST_GPU_RENDERER \
 ./scripts/verify_scenario5.sh   # 线框立方体 + yaw 旋转
 ./scripts/verify_scenario6.sh   # 线框球体 + yaw 旋转
 ./scripts/verify_scenario7.sh   # Even UX 侧视 panel 动画
+./scripts/verify_scenario8.sh   # GPU 2D 边角（sw_raster=0，见下）
+
+# 场景 8：Freetype 描边 / DIFFERENCE+旋转 / ARGB mask / ARC+img / atlas overflow
+# 默认 LVGL_VERIFY_SW_RASTER=1、LVGL_GPU_GLYPH_ATLAS_SIZE=128（压测 overflow 路径）
+# 主机需 DejaVuSans.ttf；板端见 board_test_all.sh scenario 8 子集
 
 ./scripts/verify_pass_simplify.sh   # Scenario 2 unified pass 离屏验收
 ./scripts/run_pass_simplify_visual.sh   # Scenario 2 有窗口预览
@@ -2106,7 +2111,7 @@ cmake -B build-vgl-glfw -DCONFIG=lvgl2d3dbackend-glfw
 cmake --build build-vgl-glfw -j
 ```
 
-PetaLinux 板端交叉编译见 `./scripts/build_petalinux.sh`。
+PetaLinux 板端交叉编译见 `./scripts/build_petalinux.sh`；板端回归 `./scripts/board_test_all.sh`（VERIFY-LITE 场景 1–4 + 8）。
 
 ### 14.5 两套测试对比
 
@@ -2115,7 +2120,7 @@ PetaLinux 板端交叉编译见 `./scripts/build_petalinux.sh`。
 | 位置 | `lvgl/tests/` | `scripts/` + `src/demos/lvgl_verify.c` |
 | 框架 | Unity + `main.py` | 环境变量 + 进程退出码 |
 | 显示 | 隐藏 GLFW 窗口 | `lvglsim` + xvfb（glfw）或 Wayland |
-| 覆盖 | 3D 按钮 + framegraph 统计 | 场景 1–7 全帧验证（像素 + fg/gpu_path） |
+| 覆盖 | 3D 按钮 + framegraph 统计 | 场景 1–8 全帧验证（像素 + fg/gpu_path + `sw_raster=0`） |
 
 ### 14.6 常见问题
 
@@ -2141,7 +2146,7 @@ PetaLinux 板端交叉编译见 `./scripts/build_petalinux.sh`。
 | 维度 | 在本项目中的含义 |
 |------|------------------|
 | **Minimum** | 完整 DAG framegraph（6 `lv_gpu_fg_space_t` pass）、静态 scene 跳过、`energy_cost`、LAYER GPU 回贴；`[HW:TILE_COMPOSITOR]` 仍不做 |
-| **Viable** | 场景 1–6、`LVGL_VERIFY`、板端 ~60fps @ 1080p（mono wireframe bench） |
+| **Viable** | 场景 1–8、`LVGL_VERIFY`（`LVGL_VERIFY_SW_RASTER=1`）、板端 ~60fps @ 1080p（mono wireframe bench） |
 | **Product** | 智能眼镜 AR 2D/3D 混合渲染通路可演示、可回归 |
 
 文档 §7.7.8 中 **Phase A/B/C 已落地**（除 `[HW:TILE_COMPOSITOR]`）；MVP 指可验收的 AR 2D/3D 混合通路，而非「简化 framegraph」。

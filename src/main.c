@@ -99,6 +99,12 @@ int main(int argc, char ** argv)
     int scenario = scen ? atoi(scen) : 2;
     const char * verify = getenv("LVGL_VERIFY");
 
+#if LV_USE_DRAW_GPU_RENDERER
+    if(scenario == 8) {
+        lvgl_scenario8_gpu2d_edges_create();
+    }
+    else
+#endif
 #if LV_USE_3D
     if(scenario == 1) {
         lvgl_scenario1_launcher_create();
