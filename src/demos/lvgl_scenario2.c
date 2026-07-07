@@ -214,7 +214,9 @@ static void nav_hud_create(lv_obj_t * scr)
 void lvgl_scenario2_skyline_create(void)
 {
 #if LV_USE_DRAW_GPU_RENDERER
+    /* 2D HUD (NAV label) → framegraph OVERLAY pass. */
     lv_gpu_renderer_set_ui_mode(LV_GPU_RENDERER_UI_NAV_AR);
+    lv_gpu_renderer_set_unified_pass(true);
 #endif
     lv_obj_t * scr = lv_screen_active();
     lv_obj_set_style_bg_opa(scr, LV_OPA_0, 0);

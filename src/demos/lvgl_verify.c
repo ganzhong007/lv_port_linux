@@ -41,11 +41,16 @@ static int env_bool(const char * name, int default_val)
     return atoi(v) != 0;
 }
 
+static int verify_quiet_mode(void)
+{
+    return env_bool("LVGL_VERIFY_QUIET", 0);
+}
+
 static void verify_log_path_stats(const lv_gpu_renderer_verify_stats_t * s)
 {
     if(s->gl_renderer[0]) {
         printf("LVGL_VERIFY: path renderer=%s gpu2d=%u gpu3d=%u sw_overlay=%u sw_raster=%u "
-               "fg_pass=%u fg_batch=%u fg_mat=%u gl_finish=%u\n",
+               "fg_pass=%u fg_batch=%u fg_mat=%u gl_finish=%u unified=%u\n",
                s->gl_renderer,
                (unsigned)s->gpu_2d_tasks,
                (unsigned)s->gpu_3d_draws,
@@ -54,11 +59,12 @@ static void verify_log_path_stats(const lv_gpu_renderer_verify_stats_t * s)
                (unsigned)s->fg_pass_count,
                (unsigned)s->fg_batch_count,
                (unsigned)s->fg_material_batches,
-               (unsigned)s->fg_gl_finish_count);
+               (unsigned)s->fg_gl_finish_count,
+               (unsigned)s->fg_unified_overlay_merged);
     }
     else {
         printf("LVGL_VERIFY: path gpu2d=%u gpu3d=%u sw_overlay=%u sw_raster=%u "
-               "fg_pass=%u fg_batch=%u fg_mat=%u gl_finish=%u\n",
+               "fg_pass=%u fg_batch=%u fg_mat=%u gl_finish=%u unified=%u\n",
                (unsigned)s->gpu_2d_tasks,
                (unsigned)s->gpu_3d_draws,
                (unsigned)s->sw_overlay_uploads,
@@ -66,7 +72,8 @@ static void verify_log_path_stats(const lv_gpu_renderer_verify_stats_t * s)
                (unsigned)s->fg_pass_count,
                (unsigned)s->fg_batch_count,
                (unsigned)s->fg_material_batches,
-               (unsigned)s->fg_gl_finish_count);
+               (unsigned)s->fg_gl_finish_count,
+               (unsigned)s->fg_unified_overlay_merged);
     }
 }
 
@@ -95,8 +102,20 @@ static int verify_fg_framegraph(const lv_gpu_renderer_verify_stats_t * s)
             }
             break;
         case 2:
-            /* NAV AR: mixed 3D + GPU 2D HUD */
-            if(s->fg_pass_count < 1 || s->fg_pass_count > 3) {
+            /* NAV AR: unified pass → 3D viewport + OVERLAY HUD in one fg pass */
+            if(env_bool("LVGL_FG_UNIFIED_PASS", 1)) {
+                if(s->fg_pass_count != 1) {
+                    printf("LVGL_VERIFY: FAIL fg scenario=2 pass_count=%u (expect 1 unified)\n",
+                           (unsigned)s->fg_pass_count);
+                    return 0;
+                }
+                if(s->fg_unified_overlay_merged < 1) {
+                    printf("LVGL_VERIFY: FAIL fg scenario=2 unified_overlay_merged=%u (expect >=1)\n",
+                           (unsigned)s->fg_unified_overlay_merged);
+                    return 0;
+                }
+            }
+            else if(s->fg_pass_count < 1 || s->fg_pass_count > 3) {
                 printf("LVGL_VERIFY: FAIL fg scenario=2 pass_count=%u (expect 1..3)\n",
                        (unsigned)s->fg_pass_count);
                 return 0;
@@ -352,9 +371,20 @@ static void verify_one_frame(lv_display_t * disp)
 #endif
 
     frames_checked++;
-    verify_log_path_stats(&stats);
+    if(!verify_quiet_mode()) {
+        verify_log_path_stats(&stats);
+    }
 
-    if(scenario_id == 4) {
+    if(verify_quiet_mode()) {
+        if(frame_idx == 1 || frame_idx == frames_to_check || (frame_idx % 10) == 0) {
+            printf("LVGL_VERIFY: frame %d/%d ok pass=%u sw_overlay=%u unified=%u\n",
+                   frame_idx, frames_to_check,
+                   (unsigned)stats.fg_pass_count,
+                   (unsigned)stats.sw_overlay_uploads,
+                   (unsigned)stats.fg_unified_overlay_merged);
+        }
+    }
+    else if(scenario_id == 4) {
         printf("LVGL_VERIFY: frame %d/%d ok corner_a=%u max_a=%u flush_items=%u "
                "bluish=%u center_rgba=%u,%u,%u,%u\n",
                frame_idx, frames_to_check,

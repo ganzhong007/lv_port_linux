@@ -119,7 +119,6 @@ void lvgl_scenario6_stereo_sphere_create(void)
 
     lv_gpu_renderer_set_ui_mode(LV_GPU_RENDERER_UI_WIREFRAME_BENCH);
     lv_gpu_renderer_set_skip_alpha_probe(true);
-    lv_gpu_renderer_set_overlay_2d_enable(false);
     if(!g_stereo) {
         setenv("LVGL_DRM_TURBO", "1", 0);
     }
@@ -173,7 +172,6 @@ void lvgl_scenario6_stereo_sphere_create(void)
         lv_obj_set_style_radius(tag, 4, 0);
         lv_obj_align(tag, LV_ALIGN_TOP_MID, 0, 8);
         lv_obj_move_foreground(tag);
-        lv_gpu_renderer_set_overlay_2d_enable(true);
     }
 
     g_yaw_deg = 0.0f;
