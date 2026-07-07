@@ -344,6 +344,11 @@ void lvgl_scenario7_video_crop_create(void)
     printf("LVGL_SCENARIO7: 20s keyframe side-view (grid + hero 1/3/4 focus), no video\n");
 }
 
+uint32_t lvgl_scenario7_get_anim_ms(void)
+{
+    return lv_tick_elaps(g_anim_start);
+}
+
 #else
 
 void lvgl_scenario7_video_crop_create(void)
@@ -353,6 +358,11 @@ void lvgl_scenario7_video_crop_create(void)
     lv_label_set_text(lbl, "LVGL_SCENARIO7: requires LV_USE_3D + LV_USE_DRAW_GPU_RENDERER");
     lv_obj_center(lbl);
     printf("LVGL_SCENARIO7: requires 3D + gpu_renderer\n");
+}
+
+uint32_t lvgl_scenario7_get_anim_ms(void)
+{
+    return 0;
 }
 
 #endif

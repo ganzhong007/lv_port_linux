@@ -34,6 +34,8 @@ void lvgl_scenario4_3dbutton_create(void);
 void lvgl_scenario5_stereo_cube_create(void);
 void lvgl_scenario6_stereo_sphere_create(void);
 void lvgl_scenario7_video_crop_create(void);
+/** Elapsed animation time in ms (scenario 7 verify). */
+uint32_t lvgl_scenario7_get_anim_ms(void);
 
 /** Active wireframe mesh count (scenario 3 verify). */
 int lvgl_scenario3_get_mesh_count(void);
