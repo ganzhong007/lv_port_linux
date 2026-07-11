@@ -304,6 +304,42 @@ cmake -B build-g2d -DCONFIG=wayland-g2d && cmake --build build-g2d
 
 运行命令相同：`./build*/bin/lvglsim -b wayland`。
 
+### SHM vs EGL 压力测试对比（WSLg，2026-07-11）
+
+使用 `lv_demo_stress`，各后端运行 **45 秒**，sysmon 日志模式统计 FPS（去掉前 3 个启动样本）。复现：
+
+```bash
+./scripts/benchmark_stress_shm_vs_egl.sh 45
+```
+
+测试前在 `configs/wayland.defaults` / `wayland-egl.defaults` 中设置 `LV_DEF_REFR_PERIOD`，然后重新 cmake 构建 `build-stress-shm` / `build-stress-egl`。
+
+#### `LV_DEF_REFR_PERIOD = 16`（理论上限 ~62 FPS）
+
+| 指标 | SHM | EGL |
+|------|-----|-----|
+| **平均 FPS** | **61.2** | **61.1** |
+| **中位 FPS** | 62 | 62 |
+| **CPU** | 2.3% | 3.3% |
+| **flush** | 2.6 ms | 7.1 ms |
+
+#### `LV_DEF_REFR_PERIOD = 1`（极高刷新请求）
+
+| 指标 | SHM | EGL |
+|------|-----|-----|
+| **稳定 FPS**（过滤 >120 离群值） | **61.6** | **63.1** |
+| **中位 FPS** | 61 | 60 |
+| **CPU** | 2.3% | 3.6% |
+| **flush** | 14.7 ms | 14.4 ms |
+
+> `REF_PERIOD=1` 时 sysmon 原始 `fps_avg` 会飙到 157 / 174（max 720 / 792），系 300 ms 统计窗口在极高刷新请求下的计数 artifact，**不能当真**；实际仍被 WSLg compositor / vsync 限制在 **~60 FPS**。
+
+**结论（两次 stress 一致）：**
+
+- SHM 与 EGL **帧率几乎相同**，瓶颈在 compositor / 刷新周期，而非 CPU 绘制 vs GPU NanoVG。
+- EGL **flush 耗时更高**（16 ms 时约 7 ms vs 2.6 ms）；`REF_PERIOD=1` 时两条路径 flush 均升至 ~15 ms。
+- 当前配置文件中 `LV_DEF_REFR_PERIOD` 仍为 **1**（stress 测试用）；simple button 日常调试可改回 **33** 或 **16**。
+
 ---
 
 ### 公共入口（三种后端相同）
