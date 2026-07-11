@@ -309,7 +309,8 @@ cmake -B build-g2d -DCONFIG=wayland-g2d && cmake --build build-g2d
 使用 `lv_demo_stress`，各后端运行 **45 秒**，sysmon 日志模式统计 FPS（去掉前 3 个启动样本）。复现：
 
 ```bash
-./scripts/benchmark_stress_shm_vs_egl.sh 45
+./scripts/benchmark_stress_shm_vs_egl.sh 45          # 800×480（默认）
+./scripts/benchmark_stress_shm_vs_egl.sh 45 3200 1920  # 4× 分辨率
 ```
 
 测试前在 `configs/wayland.defaults` / `wayland-egl.defaults` 中设置 `LV_DEF_REFR_PERIOD`，然后重新 cmake 构建 `build-stress-shm` / `build-stress-egl`。
@@ -339,6 +340,24 @@ cmake -B build-g2d -DCONFIG=wayland-g2d && cmake --build build-g2d
 - SHM 与 EGL **帧率几乎相同**，瓶颈在 compositor / 刷新周期，而非 CPU 绘制 vs GPU NanoVG。
 - EGL **flush 耗时更高**（16 ms 时约 7 ms vs 2.6 ms）；`REF_PERIOD=1` 时两条路径 flush 均升至 ~15 ms。
 - 当前配置文件中 `LV_DEF_REFR_PERIOD` 仍为 **1**（stress 测试用）；simple button 日常调试可改回 **33** 或 **16**。
+
+#### 分辨率 ×4（3200×1920，`LV_DEF_REFR_PERIOD = 1`）
+
+命令：`./build-stress-*/bin/lvglsim -b wayland -W 3200 -H 1920`（默认 800×480 的 4 倍）。
+
+| 指标 | SHM | EGL | 800×480 对照（REF=1） |
+|------|-----|-----|------------------------|
+| **稳定 FPS**（过滤 >120 离群值） | **57.3** | **25.2** | 61.6 / 63.1 |
+| **中位 FPS** | 58 | 23 | 61 / 60 |
+| **CPU** | 3.7% | 3.7% | 2.3% / 3.6% |
+| **render** | 0.9 ms | 0.1 ms | ~0 / ~0 |
+| **flush** | 14.6 ms | **44.2 ms** | 14.7 / 14.4 ms |
+
+**4× 分辨率结论：**
+
+- 像素面积增至 **16 倍**（800×480 → 3200×1920），SHM 仍维持 **~57 FPS**，仅略低于 800×480 的 ~61 FPS。
+- EGL 降至 **~25 FPS**，瓶颈在 **flush / `eglSwapBuffers`**（平均 44 ms，峰值 flush 可达 146 ms），NanoVG GPU 绘制本身仍很快（render ≈ 0）。
+- **高分辨率 stress 场景下 SHM 明显优于 EGL**；与 800×480 上「两者帧率几乎相同」形成对比。
 
 ---
 
