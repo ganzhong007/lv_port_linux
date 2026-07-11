@@ -159,62 +159,7 @@ if (CONFIG_LV_USE_WAYLAND)
     list(APPEND PKG_CONFIG_LIB ${WAYLAND_CLIENT_LIBRARIES})
     list(APPEND PKG_CONFIG_LIB ${WAYLAND_CURSOR_LIBRARIES})
     list(APPEND PKG_CONFIG_LIB ${XKBCOMMON_LIBRARIES})
-
-    # Wayland protocols
-    pkg_check_modules(WAYLAND_PROTOCOLS REQUIRED wayland-protocols>=1.20)
-    pkg_get_variable(WAYLAND_PROTOCOLS_BASE wayland-protocols pkgdatadir)
-
-    if(DEFINED ENV{SDKTARGETSYSROOT} AND DEFINED ENV{SYSROOT})
-        message(FATAL_ERROR "Both SDKTARGETSYSROOT and SYSROOT are set. Please set only one.")
-    endif()
-    
-    if(DEFINED ENV{SDKTARGETSYSROOT})
-        set(PROTOCOL_ROOT "$ENV{SDKTARGETSYSROOT}/usr/share/wayland-protocols")
-    elseif(DEFINED ENV{SYSROOT})
-        set(PROTOCOL_ROOT "$ENV{SYSROOT}/usr/share/wayland-protocols")
-    else()
-        set(PROTOCOL_ROOT "/usr/share/wayland-protocols")
-    endif()
-    
-    if(NOT EXISTS ${PROTOCOL_ROOT})
-        message(FATAL_ERROR "Wayland protocols not found at ${PROTOCOL_ROOT}")
-    endif()
-    
-    set(PROTOCOLS_DIR "${CMAKE_CURRENT_BINARY_DIR}/protocols")
-    file(MAKE_DIRECTORY ${PROTOCOLS_DIR})
-    
-    set(WAYLAND_PROTOCOLS_SRC "")
-
-    # Use public-code for shared libs, private-code for static libs
-    if(BUILD_SHARED_LIBS)
-        set(WAYLAND_SCANNER_CODE_MODE "public-code")
-    else()
-        set(WAYLAND_SCANNER_CODE_MODE "private-code")
-    endif()
-
-    # Generate xdg-shell protocol (always)
-    set(XDG_SHELL_XML "${PROTOCOL_ROOT}/stable/xdg-shell/xdg-shell.xml")
-    set(XDG_SHELL_HEADER "${PROTOCOLS_DIR}/wayland_xdg_shell.h")
-    set(XDG_SHELL_SOURCE "${PROTOCOLS_DIR}/wayland_xdg_shell.c")
-    
-    if(NOT EXISTS ${XDG_SHELL_HEADER} OR NOT EXISTS ${XDG_SHELL_SOURCE})
-        execute_process(COMMAND wayland-scanner client-header ${XDG_SHELL_XML} ${XDG_SHELL_HEADER})
-        execute_process(COMMAND wayland-scanner ${WAYLAND_SCANNER_CODE_MODE} ${XDG_SHELL_XML} ${XDG_SHELL_SOURCE})
-    endif()
-    list(APPEND WAYLAND_PROTOCOLS_SRC ${XDG_SHELL_SOURCE})
-    
-    # Generate dmabuf protocol (if config is set)
-    if(CONFIG_LV_WAYLAND_USE_G2D)
-        set(DMABUF_XML "${PROTOCOL_ROOT}/stable/linux-dmabuf/linux-dmabuf-v1.xml")
-        set(DMABUF_HEADER "${PROTOCOLS_DIR}/wayland_linux_dmabuf.h")
-        set(DMABUF_SOURCE "${PROTOCOLS_DIR}/wayland_linux_dmabuf.c")
-        
-        if(NOT EXISTS ${DMABUF_HEADER} OR NOT EXISTS ${DMABUF_SOURCE})
-            execute_process(COMMAND wayland-scanner client-header ${DMABUF_XML} ${DMABUF_HEADER})
-            execute_process(COMMAND wayland-scanner ${WAYLAND_SCANNER_CODE_MODE} ${DMABUF_XML} ${DMABUF_SOURCE})
-        endif()
-        list(APPEND WAYLAND_PROTOCOLS_SRC ${DMABUF_SOURCE})
-    endif()
+    list(APPEND PKG_CONFIG_INC ${XKBCOMMON_INCLUDE_DIRS})
 
     if(CONFIG_LV_WAYLAND_USE_EGL)
         message("Including WAYLAND EGL support")
@@ -222,9 +167,9 @@ if (CONFIG_LV_USE_WAYLAND)
         list(APPEND PKG_CONFIG_LIB ${WAYLAND_EGL_LIBRARIES})
         list(APPEND PKG_CONFIG_INC ${WAYLAND_EGL_INCLUDE_DIRS})
     endif()
-    
-    list(APPEND PKG_CONFIG_INC ${PROTOCOLS_DIR})
-    list(APPEND LV_LINUX_BACKEND_SRC src/lib/display_backends/wayland.c ${WAYLAND_PROTOCOLS_SRC})
+
+    # Wayland protocols are generated and linked inside the lvgl submodule.
+    list(APPEND LV_LINUX_BACKEND_SRC src/lib/display_backends/wayland.c)
 
 endif()
 
@@ -410,6 +355,12 @@ add_executable(lvglsim src/main.c)
 
 # Repeat lvgl_linux to resolve circular dependency with lvgl
 target_link_libraries(lvglsim lvgl_linux lvgl lvgl_linux)
+if(TARGET lvgl_demos)
+    target_link_libraries(lvglsim lvgl_demos)
+endif()
+if(TARGET lvgl_examples)
+    target_link_libraries(lvglsim lvgl_examples)
+endif()
 
 if(WERROR)
     target_compile_options(lvglsim PRIVATE -Werror)
