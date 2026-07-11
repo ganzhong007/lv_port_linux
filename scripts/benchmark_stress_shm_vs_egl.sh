@@ -6,6 +6,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DURATION="${1:-45}"
 WIDTH="${2:-800}"
 HEIGHT="${3:-480}"
+DRAW_MULT="${4:-1}"
 BUILD_SHM="$ROOT/build-stress-shm"
 BUILD_EGL="$ROOT/build-stress-egl"
 LOG_DIR="$ROOT/benchmark_logs"
@@ -16,6 +17,7 @@ RUN_ARGS=(-b wayland -W "$WIDTH" -H "$HEIGHT")
 CMAKE_COMMON=(
   -DLVGL_APP_DEMO=stress
   -DLVGL_SIMPLE_BUTTON_TRACE=OFF
+  -DLV_DEMO_STRESS_DRAW_MULT="$DRAW_MULT"
 )
 
 echo "==> Building wayland (SHM) + stress demo -> $BUILD_SHM"
@@ -68,7 +70,7 @@ run_capture "shm" "$BUILD_SHM/bin/lvglsim"
 run_capture "egl" "$BUILD_EGL/bin/lvglsim"
 
 echo
-echo "Resolution: ${WIDTH}x${HEIGHT}  Duration: ${DURATION}s"
+echo "Resolution: ${WIDTH}x${HEIGHT}  Duration: ${DURATION}s  DRAW_MULT: ${DRAW_MULT}"
 echo "Raw logs: $LOG_DIR/shm.log , $LOG_DIR/egl.log"
-echo "Tip: ./scripts/benchmark_stress_shm_vs_egl.sh 45 3200 1920"
+echo "Tip: ./scripts/benchmark_stress_shm_vs_egl.sh 45 1600 960 10"
 echo "Tip: grep 'sysmon:' benchmark_logs/*.log | tail -20"
