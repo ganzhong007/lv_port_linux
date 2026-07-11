@@ -351,7 +351,25 @@ target_include_directories(lvgl_linux PUBLIC
 # Link LVGL with external dependencies - Modern CMake/CMP0079 allows this
 target_link_libraries(lvgl PUBLIC ${PKG_CONFIG_LIB} m pthread rt dl)
 
-add_executable(lvglsim src/main.c)
+add_executable(lvglsim src/main.c src/simple_button.c src/simple_button_shot.c)
+
+option(LVGL_SIMPLE_BUTTON_TRACE "Enable layer trace logs for the simple button walkthrough" ON)
+set(LVGL_APP_DEMO "simple_button" CACHE STRING "App entry: simple_button, stress, benchmark")
+
+if(LVGL_APP_DEMO STREQUAL "stress")
+    target_compile_definitions(lvglsim PRIVATE LVGL_APP_DEMO_STRESS=1)
+elseif(LVGL_APP_DEMO STREQUAL "benchmark")
+    target_compile_definitions(lvglsim PRIVATE LVGL_APP_DEMO_BENCHMARK=1)
+endif()
+
+if(LVGL_SIMPLE_BUTTON_TRACE)
+    target_compile_definitions(lvglsim PRIVATE LV_USE_PORT_LAYER_TRACE=1)
+    target_compile_definitions(lvgl PRIVATE LV_USE_PORT_LAYER_TRACE=1)
+    target_compile_definitions(lvgl_linux PRIVATE LV_USE_PORT_LAYER_TRACE=1)
+endif()
+
+target_include_directories(lvglsim PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/lvgl/src/libs)
+target_include_directories(lvgl_linux PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
 # Repeat lvgl_linux to resolve circular dependency with lvgl
 target_link_libraries(lvglsim lvgl_linux lvgl lvgl_linux)

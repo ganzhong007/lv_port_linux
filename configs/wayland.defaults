@@ -1,5 +1,8 @@
 LV_COLOR_DEPTH 16
 
+# Refresh period: 1 ms (stress test — very high FPS cap)
+LV_DEF_REFR_PERIOD 1
+
 # drivers
 LV_USE_WAYLAND 1
 LV_WAYLAND_WINDOW_DECORATIONS 0 // Set to 1 on weston or gnome
@@ -24,7 +27,12 @@ LV_LOG_PRINTF 1
 # Enable sysmon to track performance
 LV_USE_SYSMON              1
 LV_USE_PERF_MONITOR        1
+LV_USE_PERF_MONITOR_LOG_MODE 1
 LV_SYSMON_PROC_IDLE_AVAILABLE 1
+LV_LOG_LEVEL LV_LOG_LEVEL_INFO
+
+# Snapshot for doc screenshots (SIMPLE_BUTTON_DOC_SHOTS=1)
+LV_USE_SNAPSHOT            1
 
 # Vector graphics
 LV_USE_FLOAT            1

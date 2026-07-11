@@ -24,6 +24,7 @@
 #include "../simulator_util.h"
 #include "../simulator_settings.h"
 #include "../backends.h"
+#include "../../lvgl_port_trace.h"
 
 /*********************
  *      DEFINES
@@ -93,6 +94,9 @@ static lv_display_t * init_wayland(void)
 
     disp = lv_wayland_window_create(settings.window_width, settings.window_height,
                                     "LVGL Simulator", NULL);
+
+    LVGL_PORT_TRACE("L0-PORT", "Wayland display %dx%d created", settings.window_width,
+                    settings.window_height);
 
     if(disp == NULL) {
         die("Failed to initialize Wayland backend\n");

@@ -24,7 +24,10 @@
 #include <string.h>
 
 #include "lvgl/lvgl.h"
+#include "src/simple_button.h"
+#if LV_USE_DEMO_STRESS
 #include "lvgl/demos/lv_demos.h"
+#endif
 
 #include "src/lib/driver_backends.h"
 #include "src/lib/simulator_util.h"
@@ -183,9 +186,14 @@ int main(int argc, char ** argv)
     }
 #endif
 
-    /*Create a Demo*/
-    lv_demo_widgets();
-    lv_demo_widgets_start_slideshow();
+    /* Minimal example: one fullscreen button (see src/simple_button.c) */
+#if defined(LVGL_APP_DEMO_STRESS) && LV_USE_DEMO_STRESS
+    lv_demo_stress();
+#elif defined(LVGL_APP_DEMO_BENCHMARK) && LV_USE_DEMO_BENCHMARK
+    lv_demo_benchmark();
+#else
+    simple_button_create();
+#endif
 
     /* Enter the run loop of the selected backend */
     driver_backends_run_loop();
