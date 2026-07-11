@@ -1,6 +1,6 @@
-# 最简单 LVGL 示例：全屏 Button
+# 最简单 LVGL 示例：居中 Button（屏幕 1/8 大小）
 
-本示例把屏幕做成**一个全屏按钮**，代码独立在 `src/simple_button.c`，`main.c` 只负责初始化与主循环，不再加载 `lv_demo_widgets`。
+本示例在屏幕中央放一个 **宽、高各为屏幕 1/8** 的按钮，代码独立在 `src/simple_button.c`，`main.c` 只负责初始化与主循环，不再加载 `lv_demo_widgets`。
 
 ## 运行
 
@@ -30,84 +30,75 @@ chmod +x scripts/run_simple_button_demo.sh
 
 ### 5.1 你看到的界面（800×480 窗口）
 
-```
-┌─────────────────────────────────────────────── LVGL Simulator ─┐
-│                                                                │
-│                                                                │
-│                                                                │
-│                      Hello LVGL          ← 居中白字            │
-│              （全屏可点的按钮区域，默认主题蓝/灰底）              │
-│                                                                │
-│                                                                │
-│                                         FPS 12  ← 右下角性能监视│
-└────────────────────────────────────────────────────────────────┘
-  0,0                                              799,479
-```
+**点击前（`Hello LVGL`）：**
+
+![启动后：居中 1/8 屏幕大小的按钮](image.png)
+
+**点击后（`Clicked!`）：**
+
+![点击后：文字已更新](image-1.png)
 
 说明：
 
-| 屏幕元素 | 日志中的坐标（实测） | 来源 |
-|----------|----------------------|------|
-| 全屏按钮 | FILL `(0,0)-(799,479)` | `simple_button.c` 设 `lv_pct(100)` |
-| 文字 “Hello LVGL” | LABEL `(361,232)-(438,247)` | 第一帧绘制 |
-| 右下角 FPS | FILL+LABEL `(638,442)-(799,479)` | `LV_USE_PERF_MONITOR` 开启（与按钮无关，但会持续刷小脏区） |
+| 屏幕元素 | 实测表现 | 来源 |
+|----------|----------|------|
+| 背景 | 浅灰铺满 800×480 | 默认 screen 样式 |
+| 按钮 | 约 **100×60**（800/8 × 480/8），蓝色圆角，**居中** | `simple_button.c` |
+| 文字 | 点击前 `Hello LVGL`，点击后 `Clicked!` | `lv_label` 子对象 |
+| 右下角 FPS | **已关闭** | `configs/wayland.defaults` 中 `LV_USE_PERF_MONITOR 0` |
 
-点击后，文字变为 **“Clicked!”**，位置变为 `(372,232)-(428,247)`（字更短，水平仍大致居中）。
+> 截图文件与本文档同目录：`docs/image.png`（点击前）、`docs/image-1.png`（点击后）。
 
 ---
 
 ### 5.2 讲解员旁白：启动 → 第一帧上屏
 
-**【画面】** 窗口弹出，立刻出现一块铺满窗口的按钮，中间写着 `Hello LVGL`，右下角有 FPS 数字在跳。
+**【画面】** 见 `image.png`：窗口弹出，**中央**出现一块小按钮（约为屏幕 1/8 宽高），写着 `Hello LVGL`，无 FPS 叠加层。
 
 **【日志】** 按时间顺序，关键几行是：
 
 ```
 [LVGL:L0-PORT] Wayland display 800x480 created
-[LVGL:L1-APP] create fullscreen button on screen 0x6378e095d260
+[LVGL:L1-APP] create 1/8-screen button on screen 0x...
 [LVGL:L1-APP] button ready; first invalidate/refresh follows from lv_timer_handler()
 [LVGL:L4-REFR] refresh timer: draw 1 dirty region(s)
 [LVGL:L3-DRAW] add task FILL at (0,0)-(799,479)
 [LVGL:L3-DRAW] add task OTHER at (0,0)-(799,479)
-[LVGL:L3-DRAW] add task FILL at (0,0)-(799,479)
 [LVGL:L3-DRAW] add task LABEL at (361,232)-(438,247)
-[LVGL:L3-DRAW] add task FILL at (642,442)-(799,479)
-[LVGL:L3-DRAW] add task LABEL at (645,445)-(796,479)
 [LVGL:L5-FLUSH] flush_cb area (0,0)-(799,479) px=0x7aeb49089000
 [LVGL:L6-DRIVER] Wayland SHM flush (0,0)-(799,479) last=1
 ```
-![alt text](image.png)
+
 **逐层解说：**
 
 1. **L0-PORT** — “平台层先把窗户开好”  
    Wayland 在 WSLg 里创建 800×480 的 `lv_display_t`，后面所有绘制都往这块显示对象上写。
 
 2. **L1-APP** — “应用层只干一件事：造按钮”  
-   `simple_button_create()` 在默认 screen 上创建全屏 `lv_button` 和子对象 `lv_label`。  
+   `simple_button_create()` 创建 **屏幕 1/8 大小**、居中的 `lv_button` 和子对象 `lv_label`。  
    此时**还没有像素**，只是对象树搭好了。
 
 3. **L4-REFR** — “刷新层发现有一块脏区域要画”  
-   创建/改样式时内部调用了 `lv_obj_invalidate()`，刷新定时器 `lv_display_refr_timer()` 被 `lv_timer_handler()` 驱动，合并后得到 **1 个脏区**（整屏）。
+   创建/改样式时内部调用了 `lv_obj_invalidate()`，刷新定时器合并脏区后触发重绘（首帧含背景 + 按钮区）。
 
 4. **L3-DRAW** — “绘图层把 UI 拆成多个小任务”  
-   - `FILL`：按钮背景铺满 `(0,0)-(799,479)` → **你看到的底色**  
-   - `OTHER`：按钮阴影/装饰（LVGL 9 内部类型，日志里显示为 OTHER）  
-   - `LABEL (361,232)-(438,247)`：**“Hello LVGL” 七个字**  
-   - 右下角 FILL+LABEL：**FPS 性能监视器**（不是本示例代码写的，来自 `lv_conf` 里 `LV_USE_PERF_MONITOR 1`）
+   - `FILL`：按钮背景（居中约 100×60 区域）→ **你看到的蓝色块**（`image.png`）  
+   - `OTHER`：按钮阴影/装饰  
+   - `LABEL`：**“Hello LVGL”** 文字
 
 5. **L5-FLUSH → L6-DRIVER** — “把内存里的像素交给 Wayland”  
-   `flush_cb` 把 `(0,0)-(799,479)` 整块交给 `shm_flush_cb`，`last=1` 表示这是本帧最后一次 flush，随后 `wl_surface_commit`，WSLg 合成到屏幕。  
-   **这一刻，你在窗口里第一次看到了完整画面。**
+   `flush_cb` → `shm_flush_cb` → `wl_surface_commit`，WSLg 合成到屏幕。  
+   **这一刻，你在窗口里第一次看到 `image.png` 中的画面。**
 
 ---
 
 ### 5.3 讲解员旁白：点击按钮 → 改字 → 局部刷新
-![alt text](image-1.png)
-**【操作】** 在窗口任意位置按下并释放鼠标（全屏都是按钮，点哪都行）。
 
-**【画面变化】**  
-- 按下瞬间：按钮进入 pressed 视觉状态（主题默认略变深/有反馈）  
-- 释放后：中间文字从 `Hello LVGL` 变成 `Clicked!`
+**【操作】** 用鼠标点击中央蓝色按钮（位置见 `image.png`）。
+
+**【画面变化】** 见 `image-1.png`：  
+- 文字从 `Hello LVGL` 变成 `Clicked!`  
+- 按钮仍居中，尺寸不变
 
 **【日志】** 一次完整点击的关键序列（实测）：
 
@@ -119,7 +110,7 @@ chmod +x scripts/run_simple_button_demo.sh
 [LVGL:L4-REFR] invalidate area (357,228)-(442,251)
 ...
 [LVGL:L4-REFR] invalidate area (368,228)-(432,251)
-[LVGL:L4-REFR] refresh timer: draw 2 dirty region(s)
+[LVGL:L4-REFR] refresh timer: draw 1 dirty region(s)
 [LVGL:L3-DRAW] add task LABEL at (372,232)-(428,247)
 ...
 [LVGL:L5-FLUSH] flush_cb area (0,0)-(799,479) px=0x7aeb49089000
@@ -135,14 +126,14 @@ chmod +x scripts/run_simple_button_demo.sh
 | 3 | L2 输入 | 鼠标释放，命中测试仍落在 button 上 | `pointer release -> LV_EVENT_CLICKED` |
 | 4 | L1 应用 | 回调执行，`lv_label_set_text("Clicked!")` | `LV_EVENT_CLICKED -> update label text` |
 | 5 | L4 刷新 | 旧字 “Hello LVGL” 与新字 “Clicked!” 所在矩形先后被标脏 | `invalidate area (357,228)-(...)` 多次，最终约 `(368,228)-(432,251)` |
-| 6 | L3 绘图 | 只重画文字区域（外加 FPS 小脏区） | `LABEL at (372,232)-(428,247)` |
+| 6 | L3 绘图 | 只重画 label 区域 | `LABEL at (372,232)-(428,247)` |
 | 7 | L5–L6 | 像素推到 Wayland | `SHM flush ... last=1` |
 
 **要点（讲解员总结）：**
 
 - **事件从 L2 进、L1 收**：应用层 `btn_event_cb` 不直接读硬件，只处理 LVGL 派发的 `LV_EVENT_*`。  
 - **改文字 ≠ 立刻改屏幕**：`lv_label_set_text` 先 invalidate，等下一拍 `refr_timer` 才真正画。  
-- **脏区比整屏小**：invalidate 矩形约 75×24 像素（文字包围盒），理论上可局部 flush；本配置下首帧后仍可能出现整屏 flush（与双缓冲 / 性能监视器合并脏区有关），日志里可见 `draw 2 dirty region(s)`（文字区 + FPS 区）。
+- **脏区比按钮小得多**：invalidate 主要覆盖 label 包围盒，与 `image-1.png` 中仅文字变化一致。
 
 ---
 
@@ -162,18 +153,18 @@ sequenceDiagram
     Note over L0: L0-PORT Wayland display 800x480 created
 
     L1->>L4: 创建 button/label → invalidate
-    Note over L1: L1-APP create fullscreen button
+    Note over L1: L1-APP create 1/8-screen button
 
-    L4->>UI: 第一帧：全屏按钮 + Hello LVGL
-    Note over L4: L3-DRAW FILL/LABEL + L6 SHM flush (0,0)-(799,479)
+    L4->>UI: 第一帧：居中按钮 + Hello LVGL
+    Note over L4: 见 image.png
 
-    UI->>L2: 用户点击
+    UI->>L2: 用户点击按钮
     L2->>L1: PRESSED → RELEASED → CLICKED
     Note over L2: L2-INDEV pointer release -> CLICKED
 
     L1->>L4: set_text Clicked! → invalidate 文字区
     L4->>UI: 文字变为 Clicked!
-    Note over L4: L3-DRAW LABEL (372,232)-(428,247)
+    Note over L4: 见 image-1.png
 ```
 
 ---
@@ -228,7 +219,7 @@ flowchart TB
     end
 
     subgraph L1["L1 应用 (simple_button.c)"]
-        B1[lv_button_create 全屏按钮]
+        B1[lv_button_create 1/8 居中按钮]
         B2[lv_label_create 文字]
         B3[btn_event_cb 处理 CLICKED]
     end
@@ -284,7 +275,7 @@ main()
 **Trace 示例（WSLg 实测，详见 §5.2）：**
 ```
 [LVGL:L0-PORT] Wayland display 800x480 created
-[LVGL:L1-APP] create fullscreen button on screen 0x6378e095d260
+[LVGL:L1-APP] create 1/8-screen button on screen 0x...
 [LVGL:L1-APP] button ready; first invalidate/refresh follows from lv_timer_handler()
 [LVGL:L4-REFR] refresh timer: draw 1 dirty region(s)
 [LVGL:L3-DRAW] add task FILL at (0,0)-(799,479)
@@ -296,9 +287,12 @@ main()
 ### 2. L1 — 创建控件
 
 ```c
-lv_obj_t * btn = lv_button_create(scr);      // 继承 lv_obj 类，挂载到 screen 树
-lv_obj_set_size(btn, lv_pct(100), lv_pct(100));
-lv_obj_t * label = lv_label_create(btn);     // label 作为 btn 的子对象
+lv_obj_t * btn = lv_button_create(scr);
+lv_obj_set_size(btn,
+                lv_display_get_horizontal_resolution(NULL) / 8,
+                lv_display_get_vertical_resolution(NULL) / 8);
+lv_obj_center(btn);
+lv_obj_t * label = lv_label_create(btn);
 lv_label_set_text(label, "Hello LVGL");
 ```
 
@@ -338,7 +332,7 @@ lv_display_refr_timer()   // 由 lv_timer_handler() 周期调用
 [LVGL:L3-DRAW] add task OTHER at (0,0)-(799,479)
 [LVGL:L3-DRAW] add task LABEL at (361,232)-(438,247)
 ```
-（`OTHER` 为按钮阴影等装饰；右下角 FPS 另有两条 FILL/LABEL，见 §5.1 表格。）
+（`OTHER` 为按钮阴影等装饰。）
 
 ### 5. L5–L6 — Flush 到 Wayland
 
