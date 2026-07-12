@@ -256,9 +256,22 @@ case "${CP}" in
     log "Optional PF-03 soak: RUN_SEC=1800 ./scripts/verify_g100.sh CP-07a (stress only)"
     ;;
   CP-07b)
-    cmake_build stress
+    log "Path A (LV_USE_G100_LIB=0): no regression"
+    CONFIG="${CONFIG:-wayland-g100}" cmake_build stress
     [[ "${BUILD_ONLY}" == true ]] && exit 0
-    log "Optional libs/g100 path: run same as CP-07a after extract"
+    RUN_SEC="${RUN_SEC:-15}" run_demo stress
+    grep_gate 'DrawUnitG100 ready' 'G100 path A stress'
+    if grep -qE 'G100 lib ready' "/tmp/verify_g100_${CP}.log" 2>/dev/null; then
+      log "WARN gate: G100 lib log on path A (expected LV_USE_G100_LIB=0)"
+    else
+      log "PASS gate: path A uses draw/g100 inline runtime"
+    fi
+    log "Path B (LV_USE_G100_LIB=1): libs/g100 facade"
+    CONFIG=wayland-g100-lib cmake_build stress
+    RUN_SEC="${RUN_SEC:-15}" run_demo stress
+    grep_gate 'G100 lib ready' 'libs/g100 runtime init'
+    grep_gate 'DrawUnitG100 ready' 'G100 path B stress'
+    log "Optional: full perf regression ./scripts/benchmark_g100.sh 60 120"
     ;;
   CP-08)
     cmake_build 3dview
