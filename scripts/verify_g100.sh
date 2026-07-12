@@ -208,6 +208,13 @@ case "${CP}" in
     cmake_build stress
     [[ "${BUILD_ONLY}" == true ]] && exit 0
     RUN_SEC="${RUN_SEC:-60}" run_demo stress
+    grep_gate 'G100 G5 complete 2D ready' 'G5 2D task coverage'
+    grep_gate 'DrawUnitG100 ready' 'G100 unit active under stress'
+    if grep -qE 'unsupported style|Gradient fill is not supported' "/tmp/verify_g100_${CP}.log" 2>/dev/null; then
+      log "WARN gate: unsupported grad/style warn found (D2/GR may fail)"
+    else
+      log "PASS gate: no unsupported grad/style warn"
+    fi
     log "Milestone: tag g100-mvp-2d after PASS + update g100_test_results.md"
     ;;
   CP-06)

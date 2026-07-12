@@ -37,7 +37,7 @@
 | CP-03b | G3 PATTERN | 2026-07-12 | c18f16c | 39fd7a6 | — | `verify_g100.sh CP-03b` | VC-04 | PASS | avatar pattern + grad + dash; vector_graphic demo |
 | CP-04a | G4 blur | 2026-07-12 | 27e2f0c | 62ccab8 | — | `verify_g100.sh CP-04a` | BL-03～04 | PASS | Dual Kawase >256; stress 5s smoke |
 | CP-04b | G4 FBO 池 | 2026-07-12 | 08588bb | 5e1e457 | | `verify_g100.sh CP-04b` | BL-05～06 | PASS | FBO pool + box_shadow blur pipeline; render 5s |
-| CP-05 | G5 完整 2D | | | | | `verify_g100.sh CP-05` | D2-09～14, SW-01～02 | | tag: `g100-mvp-2d` |
+| CP-05 | G5 完整 2D | 2026-07-12 | | | `g100-mvp-2d` | `verify_g100.sh CP-05` | D2-09～14, SW-01～02 | PASS | stress 60s; render line/arc/layer/grad OK |
 | CP-06 | G6 3D BLIT | | | | | `verify_g100.sh CP-06` | D3-01～05 | | tag: `g100-mvp-3d-blit` |
 | CP-07a | G7 perf | | | | | `verify_g100.sh CP-07a` | PF-01～03 | | |
 | CP-07b | G7 libs/g100 | | | | | `verify_g100.sh CP-07b` | 无回归 | | 可选 |
@@ -56,7 +56,7 @@
 | Tag | CP | 日期 | 主仓 SHA | 说明 |
 |-----|:--:|:--:|:--:|------|
 | `g100-cp-00` | CP-00 | | | Bootstrap（可选补打） |
-| `g100-mvp-2d` | CP-05 | | | 2D GPU MVP |
+| `g100-mvp-2d` | CP-05 | 2026-07-12 | | 2D GPU MVP |
 | `g100-mvp-3d-blit` | CP-06 | | | 3D 纹理合成 |
 | `g100-mvp-3d-vp` | CP-11 | | | 3D Draw Task 主路径 |
 | `g100-mvp-3d-full` | CP-14 | | | 3D 栈完整 |
