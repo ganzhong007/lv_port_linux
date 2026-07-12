@@ -145,7 +145,10 @@ case "${CP}" in
     cmake_build stress
     [[ "${BUILD_ONLY}" == true ]] && exit 0
     RUN_SEC="${RUN_SEC:-20}" run_demo simple_button
+    grep_gate 'G100 native solid fill ready' 'G100 native solid fill init'
+    grep_gate 'G100 native texture draw ready' 'G100 native tex draw init'
     RUN_SEC="${RUN_SEC:-30}" run_demo stress
+    grep_gate 'DrawUnitG100 ready' 'G100 unit active under stress'
     ;;
   CP-02)
     cmake_build stress
