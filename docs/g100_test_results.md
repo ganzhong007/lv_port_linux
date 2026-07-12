@@ -44,7 +44,7 @@
 | CP-08 | G8.0 viewport | 2026-07-12 | d742f31 | bee6be2 | | `verify_g100.sh CP-08` | D3-06, D3-16～17 | PASS | 3dviewport demo; FBO clear+resolve; 2D+VP+label ~900 FPS |
 | CP-09 | G8.1 line/cb | 2026-07-12 | f1d179a | 9d5b5d6 | | `verify_g100.sh CP-09` | D3-07～08, AP-08 | PASS | orange tri + grid; orbit drag; VP resolve flip/RGB fix |
 | CP-10 | G8.2 mesh | 2026-07-12 | 41e7bc7 | d8c3c1f | | `verify_g100.sh CP-10` | D3-11, D3-18 | PASS | floor+cube mesh; depth OK; orbit/grid fixes |
-| CP-11 | G8.3 scene | | | | | `verify_g100.sh CP-11` | D3-19, D3-01 | | tag: `g100-mvp-3d-vp` |
+| CP-11 | G8.3 scene | 2026-07-12 | | | `g100-mvp-3d-vp` | `verify_g100.sh CP-11` | D3-19, D3-01 | PASS | gltf via 3D_SCENE task; no glDraw in widget event |
 | CP-12 | G8.4 light | | | | | `verify_g100.sh CP-12` | D3-13 | | |
 | CP-13 | G8.5 pick/load | | | | | `verify_g100.sh CP-13` | D3-14 | | |
 | CP-14 | G8.6 theme | | | | | `verify_g100.sh CP-14` | D3-15 | | tag: `g100-mvp-3d-full` |

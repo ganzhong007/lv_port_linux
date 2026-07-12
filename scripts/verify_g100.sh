@@ -302,6 +302,8 @@ case "${CP}" in
     cmake_build gltf
     [[ "${BUILD_ONLY}" == true ]] && exit 0
     RUN_SEC="${RUN_SEC:-60}" run_demo gltf
+    grep_gate 'G100 3D scene ready' 'G8.3 SCENE task init'
+    grep_gate 'DrawUnitG100 ready' 'G100 unit active under gltf'
     log "Milestone: tag g100-mvp-3d-vp; gate D3-19 no glDraw in widget event"
     ;;
   CP-12|CP-13|CP-14)
