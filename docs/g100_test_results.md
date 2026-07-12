@@ -45,8 +45,8 @@
 | CP-09 | G8.1 line/cb | 2026-07-12 | f1d179a | 9d5b5d6 | | `verify_g100.sh CP-09` | D3-07～08, AP-08 | PASS | orange tri + grid; orbit drag; VP resolve flip/RGB fix |
 | CP-10 | G8.2 mesh | 2026-07-12 | 41e7bc7 | d8c3c1f | | `verify_g100.sh CP-10` | D3-11, D3-18 | PASS | floor+cube mesh; depth OK; orbit/grid fixes |
 | CP-11 | G8.3 scene | 2026-07-12 | 111d166 | fc8cde7 | `g100-mvp-3d-vp` | `verify_g100.sh CP-11` | D3-19, D3-01 | PASS | gltf via 3D_SCENE task; no glDraw in widget event |
-| CP-12 | G8.4 light | 2026-07-12 | 4e8ac64 | | | `verify_g100.sh CP-12` | D3-13 | PASS | phong dir+point lights; lv_3dlight + lv_demo_3dview |
-| CP-13 | G8.5 pick/load | | | | | `verify_g100.sh CP-13` | D3-14 | | |
+| CP-12 | G8.4 light | 2026-07-12 | 4e8ac64 | bcacce4 | | `verify_g100.sh CP-12` | D3-13 | PASS | phong dir+point lights; lv_3dlight + lv_demo_3dview |
+| CP-13 | G8.5 pick/load | 2026-07-12 | 0eb0c9f | a01d830 | | `verify_g100.sh CP-13` | D3-14 | PASS | pick click + pyramid.obj loader |
 | CP-14 | G8.6 theme | | | | | `verify_g100.sh CP-14` | D3-15 | | tag: `g100-mvp-3d-full` |
 
 ---
