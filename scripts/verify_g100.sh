@@ -132,6 +132,12 @@ case "${CP}" in
     cmake_build render
     [[ "${BUILD_ONLY}" == true ]] && exit 0
     RUN_SEC="${RUN_SEC:-30}" run_demo render
+    grep_gate 'G100 native gradient ready' 'G100 native grad shader init'
+    if grep -qE 'Gradient fill is not supported' "/tmp/verify_g100_${CP}.log" 2>/dev/null; then
+      log "WARN gate: grad fallback warn found (GR-12 may fail)"
+    else
+      log "PASS gate: no grad VECTOR fallback warn"
+    fi
     log "Manual: apitrace AP-01~03; confirm GR-12 with LV_USE_VECTOR_GRAPHIC=0"
     ;;
   CP-01c)
