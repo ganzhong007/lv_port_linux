@@ -59,7 +59,7 @@
 | `g100-mvp-2d` | CP-05 | 2026-07-12 | f293adc | 2D GPU MVP |
 | `g100-mvp-3d-blit` | CP-06 | 2026-07-12 | 41a10e5 | 3D 纹理合成 |
 | `g100-mvp-3d-vp` | CP-11 | 2026-07-12 | fc8cde7 | 3D Draw Task 主路径 |
-| `g100-mvp-3d-full` | CP-14 | | | 3D 栈完整 |
+| `g100-mvp-3d-full` | CP-14 | 2026-07-12 | | 3D 栈完整 |
 
 ---
 
