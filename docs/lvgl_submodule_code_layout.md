@@ -100,9 +100,9 @@ ThorVG 等 C++ 源码在 `src/libs/thorvg/`，单独编成 `liblvgl_thorvg` 再�
 | 1 | **`core/`** | L1 核心 | 对象树、事件、样式、刷新调度 | `lv_obj*.c` 对象模型；`lv_refr.c` 脏区合并与刷新定时器；`lv_group.c` 焦点组 | 所有 widget 与 demo 的基础；点击 → invalidate → refr 均经此层 |
 | 2 | **`display/`** | L1 显示抽象 | 屏幕/图层生命周期、分辨率、flush 回调 | `lv_display.c`：`lv_display_create()`、buffer 模式、layer 链表 | 连接 `drivers/wayland` 与上层 draw；`lvglsim -W -H` 改的就是 display 分辨率 |
 | 3 | **`indev/`** | L1 输入 | 指针、键盘、encoder、手势 | `lv_indev.c` 轮询与命中测试；`lv_gridnav.c` 网格导航 | Wayland 后端创建的 pointer/keyboard 最终进 `lv_indev_read` |
-| 4 | **`draw/`** | L2–L3 绘制 | Draw task 管线、各 draw unit、图像解码 | `lv_draw.c` 任务调度；`sw/` CPU 绘制；`nanovg/` NanoVG；`opengles/`；`lv_draw_3d.c` | **wayland-egl** 走 `draw/nanovg` + `drivers/opengles`；**wayland-shm** 走 `draw/sw` |
+| 4 | **`draw/`** | L2–L3 绘制 | Draw task 管线、各 draw unit、图像解码 | `lv_draw.c` 任务调度；`sw/` CPU 绘制；`nanovg/`、`g100/`、`opengles/`；`lv_draw_3d.c` | **wayland-egl** 走 `draw/nanovg`；**wayland-g100** 走 `draw/g100`；**wayland-shm** 走 `draw/sw` |
 | 5 | **`drivers/`** | L5–L6 平台 | 对接 OS/硬件：显示、输入、GPU | `wayland/` SHM/EGL 窗口；`opengles/` EGL 上下文与纹理；`evdev/` 输入 | 本仓库 WSLg 核心：`drivers/wayland` + `drivers/opengles` |
-| 6 | **`widgets/`** | L4 控件 | 内置 UI 组件实现 | `button/`、`label/`、`3dtexture/` 等 39 个子目录；每控件 `*_class` + 事件 | `simple_button` 用的 button/label 即在此 |
+| 6 | **`widgets/`** | L4 控件 | 内置 UI 组件实现 | `button/`、`label/`、`3dtexture/` 等；每控件 `*_class` + 事件 | `simple_button` 用的 button/label 即在此；**全量清单见本文 §「LVGL 内置 Widget 全览」** |
 | 7 | **`layouts/`** | L4 布局 | Flex / Grid 等布局算法 | `flex/`、`grid/`、`lv_layout.c` | 容器内子对象排列；stress demo 里 list/flex 场景会用到 |
 | 8 | **`font/`** | L3 资源 | 字体加载与内置字库 | 大量 `lv_font_montserrat_*.c`；`fmt_txt/` 文本格式；`freetype/` 接口 | Label 绘制时的 glyph 来源 |
 | 9 | **`themes/`** | L4 外观 | 默认/ mono / simple 主题 | `default/` 等：统一样式、颜色、padding | 未自定义 style 时控件默认外观 |
@@ -110,7 +110,7 @@ ThorVG 等 C++ 源码在 `src/libs/thorvg/`，单独编成 `liblvgl_thorvg` 再�
 | 11 | **`stdlib/`** | 横切内存 | 内存、字符串、sprintf 抽象 | `lv_mem.c`；`clib/` / `builtin/` 等后端 | `LV_USE_STDLIB_*` 配置决定 malloc 实现 |
 | 12 | **`osal/`** | 横切 OS | 线程、互斥、延迟（多 RTOS/OS） | `lv_linux.c`、`lv_freertos.c`、`lv_pthread` 等 | Linux/WSL 构建通常走 `lv_linux` / pthread |
 | 13 | **`tick/`** | 横切时间 | 毫秒 tick，`lv_tick_get()` | `lv_tick.c` | `lv_timer_handler()` 与动画时间基准 |
-| 14 | **`libs/`** | L3 内嵌库 | 第三方与编解码器源码 | `nanovg/`、`thorvg/`、`gltf/`、`lodepng/`、`freetype/` 等 26 个子目录 | EGL 路径依赖 `libs/nanovg`；`LV_USE_GLTF` 用 `libs/gltf` |
+| 14 | **`libs/`** | L3 内嵌库 | 第三方与编解码器源码 | `nanovg/`、`thorvg/`、`gltf/`、`g100/`（可选 G7）等 | G0：`libs/nanovg`；G1+ 目标移除 nanovg；可选 `libs/g100` 承接 GLES2 运行时 |
 | 15 | **`debugging/`** | 调试/测试 | 运行时诊断与测试辅助 | `sysmon/` FPS/CPU 监控（stress 日志里的 `sysmon:`）；`monkey/` 随机测试 | stress 对比脚本解析的 FPS 即 **sysmon** 输出 |
 | 16 | **`others/`** | 扩展功能 | 非核心但可选的「其他」模块 | `file_explorer/`、`fragment/`、`translation/` | 一般 demo 默认不依赖；按 `lv_conf` 开关 |
 
@@ -137,10 +137,10 @@ indev/ ──事件──► core/ ──invalidate──► draw/ ──像素�
 | 目录 | 重要子目录 / 文件 |
 |------|-------------------|
 | `core/` | `lv_obj*.c`、`lv_refr.c`、`lv_event.c`、`lv_group.c` |
-| `draw/` | `sw/`（CPU）、`nanovg/`、`opengles/`、`lv_draw_rect/label/image*.c`、`lv_image_decoder.c` |
+| `draw/` | `sw/`（CPU）、`nanovg/`、`g100/`、`opengles/`、`lv_draw_rect/label/image*.c`、`lv_image_decoder.c` |
 | `drivers/` | `wayland/`、`opengles/`、`evdev/`、`sdl/`、`drm/`、`x11/` |
 | `widgets/` | 每控件一目录：`button/`、`label/`、`3dtexture/`、`chart/` … |
-| `libs/` | `nanovg/`、`thorvg/`、`gltf/`、`freetype/`、`lodepng/`、`libwebp/` |
+| `libs/` | `nanovg/`（G0）、`g100/`（可选 G7）、`thorvg/`、`gltf/`、`freetype/`、`lodepng/`、`libwebp/` |
 | `debugging/` | `sysmon/`（性能监控）、`test/`（内部测试桩） |
 | `font/` | 内嵌 Montserrat 等 `.c` 字库 + `fmt_txt/` |
 | `layouts/` | `flex/`、`grid/` |
@@ -371,6 +371,7 @@ sequenceDiagram
 |------|-----------|--------------|
 | **wayland-shm** | `draw/sw/` CPU 像素 | `drivers/wayland` SHM flush |
 | **wayland-egl** | `draw/nanovg/` + `libs/nanovg` | `drivers/wayland` + `drivers/opengles` |
+| **wayland-g100** | `draw/g100/` + `libs/nanovg`（G0） | 同上；`configs/wayland-g100.defaults` |
 
 ---
 
@@ -863,6 +864,7 @@ LVGL v9 的 **Draw Unit** 是 `lv_draw.c` 调度体系中的**可插拔渲染后
 |---|--------|----------|--------|------------|
 | 1 | **SW** | `draw/sw/` | `LV_USE_DRAW_SW`（默认 1） | `lv_init()` → `lv_draw_sw_init()` |
 | 2 | **NANOVG** | `draw/nanovg/` + `libs/nanovg/` | `LV_USE_DRAW_NANOVG` + `LV_USE_NANOVG` | `lv_opengles_init()` 内（需 `LV_USE_OPENGLES`） |
+| 2b | **G100** | `draw/g100/` + `libs/nanovg/`（G0 Bootstrap） | `LV_USE_DRAW_G100` + `LV_USE_NANOVG`（库） | `lv_opengles_init()` → `lv_draw_g100_init()`；与 NANOVG unit **互斥** |
 | 3 | **OPENGLES** | `draw/opengles/` | `LV_USE_DRAW_OPENGLES` + `LV_USE_OPENGLES` | `lv_init()` → `lv_draw_opengles_init()` |
 | 4 | **VG_LITE** | `draw/vg_lite/` | `LV_USE_DRAW_VG_LITE` | `lv_init()` → `lv_draw_vg_lite_init()` |
 | 5 | **NEMA_GFX** | `draw/nema_gfx/` + `libs/nema_gfx/` | `LV_USE_NEMA_GFX` | `lv_init()` → `lv_draw_nema_gfx_init()` |
@@ -874,7 +876,7 @@ LVGL v9 的 **Draw Unit** 是 `lv_draw.c` 调度体系中的**可插拔渲染后
 | 11 | **ESP_PPA** | `draw/espressif/ppa/` | `LV_USE_PPA` | `lv_init()` → `lv_draw_ppa_init()` |
 | 12 | **EVE** | `draw/eve/` | `LV_USE_DRAW_EVE` | `lv_init()` → `lv_draw_eve_init()` |
 
-> **注意**：NanoVG unit 不在 `lv_init.c` 里直接 init，而是在 **`drivers/opengles/lv_opengles_driver.c`** 的 `lv_opengles_init()` 中调用 `lv_draw_nanovg_init()`，以保证 GL 上下文已就绪。
+> **注意**：NanoVG / G100 unit 不在 `lv_init.c` 里直接 init，而是在 **`drivers/opengles/lv_opengles_driver.c`** 的 `lv_opengles_init()` 中调用 `lv_draw_nanovg_init()` 或 **`lv_draw_g100_init()`**，以保证 GL 上下文已就绪。详见 [drawunit_g100_design.md §2.7～2.9](./drawunit_g100_design.md#27-目录结构lvgl-子模块)。
 
 ### 总对比表
 
@@ -882,6 +884,7 @@ LVGL v9 的 **Draw Unit** 是 `lv_draw.c` 调度体系中的**可插拔渲染后
 |-----------|-------------|----------|-----------------|--------------|
 | **SW** | CPU（可选 NEON/Helium/RVV 加速 blend） | layer `draw_buf` 内存像素 | 100（兜底） | **wayland-shm 主路径**；egl 下作 fallback |
 | **NANOVG** | GPU OpenGL/GLES（矢量 raster） | **主屏**：EGL 默认 FB；**子 layer**：FBO 纹理；ReadPixels 仅 canvas/snapshot | 80 | **wayland-egl 主路径** |
+| **G100** | GPU GLES2（G0：NanoVG 库后端；G1+：原生 shader） | 同 NANOVG 主屏模型；根 layer `user_data==NULL` | 80（unit_id=11） | **wayland-g100**；`draw/g100/` 22 文件 |
 | **OPENGLES** | GPU GLES 纹理缓存 | GL texture（少读回 CPU） | 0 | glfw-3d 配置；与 NanoVG **互斥** |
 | **VG_LITE** | Vivante VG-Lite IP | VG-Lite 目标缓冲 | 80 | 未启用（嵌入式 SoC） |
 | **NEMA_GFX** | Think Silicon Nema GPU | Nema 命令流 | 80 | 未启用（STM32U5 等） |
@@ -980,6 +983,102 @@ flowchart LR
 
 ---
 
+## LVGL 内置 Widget 全览
+
+> 基于子模块 `lvgl/include/lvgl/lvgl.h` + `lv_conf_template.h`（WIDGETS 段 + 库扩展）。  
+> 官方索引：[LVGL Widgets](https://docs.lvgl.io/master/widgets/index.html)
+
+### 统计口径
+
+| 分类 | 数量 | 说明 |
+|------|:----:|------|
+| **内置 Widget（`lv_conf` WIDGETS 段）** | **34** | 默认多数 `LV_USE_* = 1` |
+| **库扩展 Widget（3RD PARTS / libs）** | **8** | 默认多数 `= 0`，需开宏并链库 |
+| **一级 Widget 合计** | **42** | 用户可直接 `*_create()` |
+| 基类 | 1 | `lv_obj`（所有 widget 父类，非业务 widget） |
+| 复合控件内部 class | ~30 | Msgbox/Menu/List 等的子部件，用户通常不直接 create |
+
+### 一级 Widget 大表（42 个）
+
+| # | 英文名 | 中文名 | 配置宏 | 默认 | 创建 API | 源码目录 | 主要用途 | 关键依赖 |
+|---|--------|--------|--------|:----:|----------|----------|----------|----------|
+| 1 | AnimImage | 动画图片 | `LV_USE_ANIMIMG` | 1 | `lv_animimg_create()` | `widgets/animimage/` | 多帧图片轮播 | `lv_image` |
+| 2 | Arc | 圆弧 | `LV_USE_ARC` | 1 | `lv_arc_create()` | `widgets/arc/` | 圆弧进度、旋钮 | — |
+| 3 | ArcLabel | 弧形文字 | `LV_USE_ARCLABEL` | 1 | `lv_arclabel_create()` | `widgets/arclabel/` | 沿圆弧排布文字 | — |
+| 4 | Bar | 进度条 | `LV_USE_BAR` | 1 | `lv_bar_create()` | `widgets/bar/` | 水平/垂直进度 | — |
+| 5 | Button | 按钮 | `LV_USE_BUTTON` | 1 | `lv_button_create()` | `widgets/button/` | 可点击按钮 | — |
+| 6 | ButtonMatrix | 按钮矩阵 | `LV_USE_BUTTONMATRIX` | 1 | `lv_buttonmatrix_create()` | `widgets/buttonmatrix/` | 键盘布局、多按钮网格 | — |
+| 7 | Calendar | 日历 | `LV_USE_CALENDAR` | 1 | `lv_calendar_create()` | `widgets/calendar/` | 月历、日期选择 | 可选 header 子组件 |
+| 8 | Canvas | 画布 | `LV_USE_CANVAS` | 1 | `lv_canvas_create()` | `widgets/canvas/` | 自绘像素 | draw_buf |
+| 9 | Chart | 图表 | `LV_USE_CHART` | 1 | `lv_chart_create()` | `widgets/chart/` | 折线/柱/散点图 | — |
+| 10 | Checkbox | 复选框 | `LV_USE_CHECKBOX` | 1 | `lv_checkbox_create()` | `widgets/checkbox/` | 勾选状态 | 内置 label |
+| 11 | Dropdown | 下拉列表 | `LV_USE_DROPDOWN` | 1 | `lv_dropdown_create()` | `widgets/dropdown/` | 单选下拉 | `lv_label` |
+| 12 | Image | 图片 | `LV_USE_IMAGE` | 1 | `lv_image_create()` | `widgets/image/` | 显示解码图片 | 图像解码器 |
+| 13 | ImageButton | 图片按钮 | `LV_USE_IMAGEBUTTON` | 1 | `lv_imagebutton_create()` | `widgets/imagebutton/` | 多状态图片按钮 | `lv_image` |
+| 14 | Keyboard | 虚拟键盘 | `LV_USE_KEYBOARD` | 1 | `lv_keyboard_create()` | `widgets/keyboard/` | 软键盘 | `lv_buttonmatrix` |
+| 15 | Label | 标签 | `LV_USE_LABEL` | 1 | `lv_label_create()` | `widgets/label/` | 文字显示 | 字体 |
+| 16 | LED | 指示灯 | `LV_USE_LED` | 1 | `lv_led_create()` | `widgets/led/` | 状态指示灯 | — |
+| 17 | Line | 线段 | `LV_USE_LINE` | 1 | `lv_line_create()` | `widgets/line/` | 折线绘制 | — |
+| 18 | List | 列表 | `LV_USE_LIST` | 1 | `lv_list_create()` | `widgets/list/` | 滚动列表 | `lv_button`、`lv_label` |
+| 19 | Lottie | Lottie 动画 | `LV_USE_LOTTIE` | 0 | `lv_lottie_create()` | `widgets/lottie/` | Lottie JSON 动画 | `lv_canvas` + ThorVG |
+| 20 | Menu | 菜单 | `LV_USE_MENU` | 1 | `lv_menu_create()` | `widgets/menu/` | 侧边栏/多级导航 | 多个内部 container |
+| 21 | Msgbox | 消息框 | `LV_USE_MSGBOX` | 1 | `lv_msgbox_create()` | `widgets/msgbox/` | 对话框 | header/footer/backdrop |
+| 22 | Roller | 滚轮选择器 | `LV_USE_ROLLER` | 1 | `lv_roller_create()` | `widgets/roller/` | 滚筒选项 | `lv_label` |
+| 23 | Scale | 刻度尺 | `LV_USE_SCALE` | 1 | `lv_scale_create()` | `widgets/scale/` | 仪表盘刻度 | `lv_line`、`lv_image` |
+| 24 | Slider | 滑块 | `LV_USE_SLIDER` | 1 | `lv_slider_create()` | `widgets/slider/` | 数值拖动 | 继承 `lv_bar` |
+| 25 | Span | 富文本段 | `LV_USE_SPAN` | 1 | `lv_spangroup_create()` | `widgets/span/` | 多样式段落 | — |
+| 26 | Spinbox | 数字微调框 | `LV_USE_SPINBOX` | 1 | `lv_spinbox_create()` | `widgets/spinbox/` | +/- 数字输入 | `lv_textarea` |
+| 27 | Spinner | 加载圈 | `LV_USE_SPINNER` | 1 | `lv_spinner_create()` | `widgets/spinner/` | 等待动画 | 基于 `lv_arc` |
+| 28 | Switch | 开关 | `LV_USE_SWITCH` | 1 | `lv_switch_create()` | `widgets/switch/` | ON/OFF | — |
+| 29 | Table | 表格 | `LV_USE_TABLE` | 1 | `lv_table_create()` | `widgets/table/` | 单元格网格 | — |
+| 30 | Tabview | 选项卡 | `LV_USE_TABVIEW` | 1 | `lv_tabview_create()` | `widgets/tabview/` | 多页 Tab | — |
+| 31 | Textarea | 多行文本框 | `LV_USE_TEXTAREA` | 1 | `lv_textarea_create()` | `widgets/textarea/` | 多行输入 | `lv_label` |
+| 32 | Tileview | 平铺视图 | `LV_USE_TILEVIEW` | 1 | `lv_tileview_create()` | `widgets/tileview/` | 滑动瓦片页 | `lv_tileview_add_tile()` |
+| 33 | Win | 窗口 | `LV_USE_WIN` | 1 | `lv_win_create()` | `widgets/win/` | 带标题栏窗口 | — |
+| 34 | 3DTexture | 3D 纹理 | `LV_USE_3DTEXTURE` | 0 | `lv_3dtexture_create()` | `widgets/3dtexture/` | 外部 GL 纹理贴进 2D UI | OpenGLES |
+| 35 | GIF | GIF 动图 | `LV_USE_GIF` | 0 | `lv_gif_create()` | `widgets/gif/` | 播放 GIF | gif 解码 |
+| 36 | QRCode | 二维码 | `LV_USE_QRCODE` | 0 | `lv_qrcode_create()` | `widgets/` + `libs/qrcode/` | 生成/显示 QR | qrcode 库 |
+| 37 | Barcode | 条形码 | `LV_USE_BARCODE` | 0 | `lv_barcode_create()` | 同上 + `libs/barcode/` | 生成/显示条码 | barcode 库 |
+| 38 | Rlottie | rlottie 动画 | `LV_USE_RLOTTIE` | 0 | `lv_rlottie_create()` | `widgets/` + rlottie | Lottie（rlottie） | rlottie |
+| 39 | GLTF | glTF 3D 场景 | `LV_USE_GLTF` | 0 | `lv_gltf_create()` | `libs/gltf/` | 加载/渲染 glTF | `LV_USE_3DTEXTURE` |
+| 40 | GStreamer | 流媒体 | `LV_USE_GSTREAMER` | 0 | `lv_gstreamer_create()` | `libs/gstreamer/` | 视频/网络流 | GStreamer |
+| 41 | IME Pinyin | 拼音输入法 | `LV_USE_IME_PINYIN` | 0 | `lv_ime_pinyin_create()` | `widgets/ime/` | 中文拼音输入 | `lv_keyboard` |
+| 42 | FFmpeg Player | FFmpeg 播放器 | `LV_USE_FFMPEG` | 0 | `lv_ffmpeg_player_create()` | `libs/ffmpeg/` | 视频软/硬解 | FFmpeg |
+
+### Calendar 子组件（随 `LV_USE_CALENDAR`）
+
+| 子组件 | 配置宏 | API |
+|--------|--------|-----|
+| Header Arrow | `LV_USE_CALENDAR_HEADER_ARROW` | `lv_calendar_header_arrow_create()` |
+| Header Dropdown | `LV_USE_CALENDAR_HEADER_DROPDOWN` | `lv_calendar_header_dropdown_create()` |
+| Chinese | `LV_USE_CALENDAR_CHINESE` | 农历 API 扩展（非独立 class） |
+
+### 复合 Widget 内部 class（非一级 widget）
+
+| 父 Widget | 内部 class 示例 |
+|-----------|-------------------|
+| Dropdown | `lv_dropdownlist_class` |
+| Tileview | `lv_tileview_tile_class` |
+| List | `lv_list_text_class`、`lv_list_button_class` |
+| Msgbox | header/content/footer/backdrop/button 等 7 个 |
+| Menu | page/cont/section/separator/sidebar 等 9 个 |
+
+### 3D 相关 Widget 关系（规划含 `lv_3dview`）
+
+| Widget | 层级 | 说明 |
+|--------|------|------|
+| `lv_3dtexture` | 显示层 | 仅 composite 已有 `tex_id` |
+| **`lv_3dview`（规划）** | 视口层 | 自管 FBO + 相机 + 渲染回调；详见 [opengles2_gpu_integration_guide §4.3](./opengles2_gpu_integration_guide.md#43-lv_3dview-规划通用-3d-视口-widget) |
+| `lv_gltf` | 引擎层 | glTF PBR 全栈；继承 `lv_3dtexture` |
+
+### 辅助模块（`others/`，非 widgets/ 目录）
+
+| 模块 | 配置宏 | API |
+|------|--------|-----|
+| File Explorer | `LV_USE_FILE_EXPLORER` | `lv_file_explorer_create()` |
+
+---
+
 ## 快速定位建议
 
 | 想查… | 去看… |
@@ -992,5 +1091,7 @@ flowchart LR
 | OpenGLES draw unit（替代 NanoVG） | `src/draw/opengles/`（见「draw/opengles 深度剖析」） |
 | NanoVG 路径澄清 / display 纹理改造 | 本文「wayland-egl 实际调用链」与「改造方案草案」 |
 | 全部 Draw Unit 对比 | 本文「Draw Unit 全览与对比」 |
+| LVGL 全部 Widget 清单 | 本文「LVGL 内置 Widget 全览」 |
+| 3D Widget 设计与 `lv_3dview` 规划 | [opengles2_gpu_integration_guide.md §4](./opengles2_gpu_integration_guide.md#4-3d-路径lv_draw_task_type_3d-与-widget) |
 | NanoVG 绘制 | `src/draw/nanovg/` + `src/libs/nanovg/` |
 | 构建选项从哪来 | 主仓 `configs/*.defaults` → 生成 `lv_conf.h` |
