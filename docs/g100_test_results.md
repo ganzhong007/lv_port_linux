@@ -29,7 +29,7 @@
 | CP | 阶段 | 日期 | lvgl SHA | 主仓 SHA | Tag | 验证命令 | 门禁用例 | 结果 | 备注 |
 |:--:|:--:|:--:|:--:|:--:|:--|:--|:--|:--:|:--|
 | CP-00 | G0 Bootstrap | 2026-07-12 | dee769a | 5420c9e | — | `verify_g100.sh CP-00` | G0-01～08, PF-01 | PASS | stress ~175 FPS, 800×480 |
-| CP-01a | G1 shader | | | | | `verify_g100.sh CP-01a` | 编译 + AP shader | | |
+| CP-01a | G1 shader | 2026-07-12 | f92e2ef | (待 commit) | — | `verify_g100.sh CP-01a` | 编译 + AP shader | PASS | `G100 native shader ready (program=18)`; simple_button ~900 FPS |
 | CP-01b | G1 grad | | | | | `verify_g100.sh CP-01b` | GR-12, AP-01～03 | | |
 | CP-01c | G1 fill/image | | | | | `verify_g100.sh CP-01c` | D2-01, GR-03～06 | | |
 | CP-02 | G2 label | | | | | `verify_g100.sh CP-02` | TX-02～04, AP-06 | | |
