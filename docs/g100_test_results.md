@@ -41,7 +41,7 @@
 | CP-06 | G6 3D BLIT | 2026-07-12 | 5b93565 | 41a10e5 | `g100-mvp-3d-blit` | `verify_g100.sh CP-06` | D3-01～05 | PASS | gltf demo; lvgl_logo.glb; 3D+2D panel OK |
 | CP-07a | G7 perf | 2026-07-12 | 5b93565 | cb9c3f7 | | `verify_g100.sh CP-07a` | PF-01～03 | PASS | benchmark FPS=144 CPU=8%; benchmark_g100.sh |
 | CP-07b | G7 libs/g100 | 2026-07-12 | 96ff709 | 45116e9 | | `verify_g100.sh CP-07b` | 无回归 | PASS | LV_USE_G100_LIB facade; path A/B verify |
-| CP-08 | G8.0 viewport | 2026-07-12 | d742f31 | | | `verify_g100.sh CP-08` | D3-06, D3-16～17 | PASS | 3dviewport demo; FBO clear+resolve; 2D+VP+label ~900 FPS |
+| CP-08 | G8.0 viewport | 2026-07-12 | d742f31 | bee6be2 | | `verify_g100.sh CP-08` | D3-06, D3-16～17 | PASS | 3dviewport demo; FBO clear+resolve; 2D+VP+label ~900 FPS |
 | CP-09 | G8.1 line/cb | | | | | `verify_g100.sh CP-09` | D3-07～08, AP-08 | | |
 | CP-10 | G8.2 mesh | | | | | `verify_g100.sh CP-10` | D3-11, D3-18 | | |
 | CP-11 | G8.3 scene | | | | | `verify_g100.sh CP-11` | D3-19, D3-01 | | tag: `g100-mvp-3d-vp` |
