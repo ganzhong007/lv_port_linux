@@ -35,7 +35,7 @@
 | CP-02 | G2 label | 2026-07-12 | a08447e | 042ecd1 | — | `verify_g100.sh CP-02` | TX-02～04, AP-06 | PASS | FNV-1a label hash; stress 5s smoke |
 | CP-03a | G3 vector | 2026-07-12 | 143bf08 | 452e38f | — | `verify_g100.sh CP-03a` | VC-01～03 | PASS | vector dash stroke + cap/join; render/simple_button OK |
 | CP-03b | G3 PATTERN | 2026-07-12 | c18f16c | 39fd7a6 | — | `verify_g100.sh CP-03b` | VC-04 | PASS | avatar pattern + grad + dash; vector_graphic demo |
-| CP-04a | G4 blur | | | | | `verify_g100.sh CP-04a` | BL-03～04 | | |
+| CP-04a | G4 blur | 2026-07-12 | | | — | `verify_g100.sh CP-04a` | BL-03～04 | PASS | Dual Kawase >256; stress 5s smoke |
 | CP-04b | G4 FBO 池 | | | | | `verify_g100.sh CP-04b` | BL-05～06 | | |
 | CP-05 | G5 完整 2D | | | | | `verify_g100.sh CP-05` | D2-09～14, SW-01～02 | | tag: `g100-mvp-2d` |
 | CP-06 | G6 3D BLIT | | | | | `verify_g100.sh CP-06` | D3-01～05 | | tag: `g100-mvp-3d-blit` |

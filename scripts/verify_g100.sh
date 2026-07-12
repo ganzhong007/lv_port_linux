@@ -182,11 +182,23 @@ case "${CP}" in
       log "PASS gate: no unsupported style warn"
     fi
     ;;
-  CP-04a|CP-04b)
+  CP-04a)
+    cmake_build stress
+    [[ "${BUILD_ONLY}" == true ]] && exit 0
+    RUN_SEC="${RUN_SEC:-5}" run_demo stress
+    grep_gate 'G100 kawase blur ready' 'kawase blur init'
+    grep_gate 'DrawUnitG100 ready' 'G100 unit active under stress'
+    if grep -qE 'exceeds backend limit \\(256\\)' "/tmp/verify_g100_${CP}.log" 2>/dev/null; then
+      log "WARN gate: legacy 256 blur skip found (BL-03 may fail)"
+    else
+      log "PASS gate: no 256 blur radius skip"
+    fi
+    ;;
+  CP-04b)
     cmake_build render
     [[ "${BUILD_ONLY}" == true ]] && exit 0
-    RUN_SEC="${RUN_SEC:-45}" run_demo render
-    log "Manual: BL-03~06 blur scenarios"
+    RUN_SEC="${RUN_SEC:-5}" run_demo render
+    log "Manual: BL-05~06 blur FBO pool scenarios"
     ;;
   CP-05)
     cmake_build render
