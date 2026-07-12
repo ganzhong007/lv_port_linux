@@ -282,9 +282,13 @@ case "${CP}" in
     log "Gates D3-06, D3-16~17 (apitrace VP+resolve)"
     ;;
   CP-09)
-    cmake_build 3dview
+    cmake_build 3dviewport
     [[ "${BUILD_ONLY}" == true ]] && exit 0
     RUN_SEC="${RUN_SEC:-45}" run_demo 3dviewport
+    grep_gate 'G100 3D line ready' 'G8.1 LINE3D shader init'
+    grep_gate 'G100 3D callback ready' 'G8.1 3D_CALLBACK hook'
+    grep_gate 'DrawUnitG100 ready' 'G100 unit active under 3dviewport'
+    log "Gates D3-07~08, AP-08 (grid + render_cb + orbit)"
     ;;
   CP-10)
     cmake_build 3dview
