@@ -310,6 +310,9 @@ case "${CP}" in
     cmake_build 3dview
     [[ "${BUILD_ONLY}" == true ]] && exit 0
     RUN_SEC="${RUN_SEC:-45}" run_demo 3dview
+    grep_gate 'G100 3D phong ready' 'G8.4 phong shader init'
+    grep_gate 'DrawUnitG100 ready' 'G100 unit active under 3dview'
+    log "Gate D3-13 (phong + lv_3dlight)"
     [[ "${CP}" == "CP-14" ]] && log "Milestone: tag g100-mvp-3d-full"
     ;;
   *)
