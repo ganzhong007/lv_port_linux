@@ -25,7 +25,7 @@
 
 #include "lvgl/lvgl.h"
 #include "src/simple_button.h"
-#if LV_USE_DEMO_STRESS || LV_USE_DEMO_BENCHMARK || LV_USE_DEMO_RENDER || LV_USE_DEMO_VECTOR_GRAPHIC || LV_USE_DEMO_GLTF || LV_USE_DEMO_3DVIEWPORT
+#if LV_USE_DEMO_STRESS || LV_USE_DEMO_BENCHMARK || LV_USE_DEMO_RENDER || LV_USE_DEMO_VECTOR_GRAPHIC || LV_USE_DEMO_GLTF || LV_USE_DEMO_3DVIEWPORT || LV_USE_DEMO_3DSCENE
 #include "lvgl/demos/lv_demos.h"
 #endif
 
@@ -201,6 +201,8 @@ int main(int argc, char ** argv)
     lv_demo_gltf(gltf_path);
 #elif defined(LVGL_APP_DEMO_3DVIEWPORT) && LV_USE_DEMO_3DVIEWPORT
     lv_demo_3dviewport();
+#elif defined(LVGL_APP_DEMO_3DSCENE) && LV_USE_DEMO_3DSCENE
+    lv_demo_3dscene();
 #else
     simple_button_create();
 #endif

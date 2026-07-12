@@ -291,9 +291,12 @@ case "${CP}" in
     log "Gates D3-07~08, AP-08 (grid + render_cb + orbit)"
     ;;
   CP-10)
-    cmake_build 3dview
+    cmake_build 3dscene
     [[ "${BUILD_ONLY}" == true ]] && exit 0
     RUN_SEC="${RUN_SEC:-45}" run_demo 3dscene
+    grep_gate 'G100 3D mesh ready' 'G8.2 MESH shader init'
+    grep_gate 'DrawUnitG100 ready' 'G100 unit active under 3dscene'
+    log "Gates D3-11, D3-18 (mesh + depth occlusion)"
     ;;
   CP-11)
     cmake_build gltf
