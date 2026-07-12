@@ -33,7 +33,7 @@
 | CP-01b | G1 grad | 2026-07-12 | d12fa25 | 5d98660 | — | `verify_g100.sh CP-01b` | GR-12, AP-01～03 | PASS | native grad program=21; render ~920 FPS; no VECTOR grad warn |
 | CP-01c | G1 fill/image | 2026-07-12 | f6cb2ea | 60552c1 | — | `verify_g100.sh CP-01c` | D2-01, GR-03～06 | PASS | native solid/tex; fix GL stencil interleave (simple_button colors OK) |
 | CP-02 | G2 label | 2026-07-12 | a08447e | 042ecd1 | — | `verify_g100.sh CP-02` | TX-02～04, AP-06 | PASS | FNV-1a label hash; stress 5s smoke |
-| CP-03a | G3 vector | 2026-07-12 | 143bf08 | | — | `verify_g100.sh CP-03a` | VC-01～03 | PASS | vector dash stroke + cap/join; render/simple_button OK |
+| CP-03a | G3 vector | 2026-07-12 | 143bf08 | 452e38f | — | `verify_g100.sh CP-03a` | VC-01～03 | PASS | vector dash stroke + cap/join; render/simple_button OK |
 | CP-03b | G3 PATTERN | | | | | `verify_g100.sh CP-03b` | VC-04 | | |
 | CP-04a | G4 blur | | | | | `verify_g100.sh CP-04a` | BL-03～04 | | |
 | CP-04b | G4 FBO 池 | | | | | `verify_g100.sh CP-04b` | BL-05～06 | | |
