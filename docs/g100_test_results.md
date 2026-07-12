@@ -39,7 +39,7 @@
 | CP-04b | G4 FBO 池 | 2026-07-12 | 08588bb | 5e1e457 | | `verify_g100.sh CP-04b` | BL-05～06 | PASS | FBO pool + box_shadow blur pipeline; render 5s |
 | CP-05 | G5 完整 2D | 2026-07-12 | cf86c33 | f293adc | `g100-mvp-2d` | `verify_g100.sh CP-05` | D2-09～14, SW-01～02 | PASS | stress 60s; render line/arc/layer/grad OK |
 | CP-06 | G6 3D BLIT | 2026-07-12 | 5b93565 | 41a10e5 | `g100-mvp-3d-blit` | `verify_g100.sh CP-06` | D3-01～05 | PASS | gltf demo; lvgl_logo.glb; 3D+2D panel OK |
-| CP-07a | G7 perf | | | | | `verify_g100.sh CP-07a` | PF-01～03 | | |
+| CP-07a | G7 perf | 2026-07-12 | 5b93565 | | | `verify_g100.sh CP-07a` | PF-01～03 | PASS | benchmark FPS=144 CPU=8%; benchmark_g100.sh |
 | CP-07b | G7 libs/g100 | | | | | `verify_g100.sh CP-07b` | 无回归 | | 可选 |
 | CP-08 | G8.0 viewport | | | | | `verify_g100.sh CP-08` | D3-06, D3-16～17 | | |
 | CP-09 | G8.1 line/cb | | | | | `verify_g100.sh CP-09` | D3-07～08, AP-08 | | |

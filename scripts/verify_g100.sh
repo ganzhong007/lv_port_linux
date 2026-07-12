@@ -232,9 +232,28 @@ case "${CP}" in
     ;;
   CP-07a)
     cmake_build benchmark
+    cmake_build stress
     [[ "${BUILD_ONLY}" == true ]] && exit 0
-    RUN_SEC="${RUN_SEC:-60}" run_demo benchmark
-    log "Optional: 30min soak PF-03"
+    RUN_SEC="${RUN_SEC:-60}" run_demo stress
+    grep_gate 'DrawUnitG100 ready' 'G100 unit active (PF-01 stress)'
+    if grep -qE 'sysmon: [1-9][0-9]* FPS' "/tmp/verify_g100_${CP}.log" 2>/dev/null; then
+      log "PASS gate: sysmon FPS samples (PF-01)"
+    else
+      log "WARN gate: no stable FPS in stress log (PF-01)"
+    fi
+    if [[ "${BENCH_RUN:-true}" == true ]]; then
+      bench_sec="${BENCH_SEC:-120}"
+      log "Running benchmark ${bench_sec}s for PF-02"
+      cmake_build benchmark
+      timeout "${bench_sec}" "${BIN}" -b wayland -W "${W}" -H "${H}" 2>&1 | tee -a "/tmp/verify_g100_${CP}.log" || true
+    fi
+    if grep -qE 'All scenes avg' "/tmp/verify_g100_${CP}.log" 2>/dev/null; then
+      log "PASS gate: benchmark CSV summary (PF-02)"
+    else
+      log "WARN gate: no benchmark summary — try BENCH_SEC=180 or ./scripts/benchmark_g100.sh 60 120"
+    fi
+    log "Perf script: ./scripts/benchmark_g100.sh [stress_sec] [benchmark_sec]"
+    log "Optional PF-03 soak: RUN_SEC=1800 ./scripts/verify_g100.sh CP-07a (stress only)"
     ;;
   CP-07b)
     cmake_build stress
