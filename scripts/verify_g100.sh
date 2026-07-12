@@ -198,7 +198,10 @@ case "${CP}" in
     cmake_build render
     [[ "${BUILD_ONLY}" == true ]] && exit 0
     RUN_SEC="${RUN_SEC:-5}" run_demo render
-    log "Manual: BL-05~06 blur FBO pool scenarios"
+    grep_gate 'G100 blur FBO pool ready' 'blur FBO pool init'
+    grep_gate 'fbo_ok=true' 'FBO pool capability flag'
+    grep_gate 'DrawUnitG100 ready' 'G100 unit active under render'
+    log "Manual: BL-05~06 blur FBO pool + box_shadow scenarios"
     ;;
   CP-05)
     cmake_build render
