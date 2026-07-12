@@ -306,14 +306,29 @@ case "${CP}" in
     grep_gate 'DrawUnitG100 ready' 'G100 unit active under gltf'
     log "Milestone: tag g100-mvp-3d-vp; gate D3-19 no glDraw in widget event"
     ;;
-  CP-12|CP-13|CP-14)
+  CP-12)
     cmake_build 3dview
     [[ "${BUILD_ONLY}" == true ]] && exit 0
     RUN_SEC="${RUN_SEC:-45}" run_demo 3dview
     grep_gate 'G100 3D phong ready' 'G8.4 phong shader init'
     grep_gate 'DrawUnitG100 ready' 'G100 unit active under 3dview'
     log "Gate D3-13 (phong + lv_3dlight)"
-    [[ "${CP}" == "CP-14" ]] && log "Milestone: tag g100-mvp-3d-full"
+    ;;
+  CP-13)
+    cmake_build 3dview
+    [[ "${BUILD_ONLY}" == true ]] && exit 0
+    RUN_SEC="${RUN_SEC:-45}" run_demo 3dview
+    grep_gate 'G100 3D pick ready' 'G8.5 pick ray-mesh'
+    grep_gate 'G100 OBJ loader ready' 'G8.5 wavefront loader'
+    grep_gate 'DrawUnitG100 ready' 'G100 unit active under 3dview'
+    log "Gate D3-14 (pick + OBJ loader + lv_3dcaps)"
+    ;;
+  CP-14)
+    cmake_build 3dview
+    [[ "${BUILD_ONLY}" == true ]] && exit 0
+    RUN_SEC="${RUN_SEC:-45}" run_demo 3dview
+    grep_gate 'DrawUnitG100 ready' 'G100 unit active under 3dview'
+    log "Milestone: tag g100-mvp-3d-full"
     ;;
   *)
     log "Unknown checkpoint: ${CP}"
