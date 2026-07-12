@@ -1189,6 +1189,8 @@ G6（3D_BLIT 合成，可与 G1～G5 并行）───┐
 | [g100_3d_draw_tasks_design.md](./g100_3d_draw_tasks_design.md) | 3D task dsc 字段、VP 子队列、Widget 映射 |
 | [opengles2_gpu_integration_guide.md §4](./opengles2_gpu_integration_guide.md#4-3d-路径draw-task-体系与-widget) | 3D 与 Widget 体系、集成总览 |
 | [drawunit_g100_test_cases.md](./drawunit_g100_test_cases.md) | GR/TX/VC/BL/D2/D3/SW/PF/AP 用例 |
+| [g100_test_results.md](./g100_test_results.md) | **Checkpoint 勾选表**、Tag 记录 |
+| [drawunit_g100_design.md §8.8](./drawunit_g100_design.md#88-checkpoint-步步为营验证与提交) | CP 明细与 SOP |
 
 ---
 
@@ -1217,11 +1219,104 @@ G6（3D_BLIT 合成，可与 G1～G5 并行）───┐
 
 日志：`benchmark_logs/stress_g100_800x480.log`
 
-**实施前验证用例**见 [drawunit_g100_test_cases.md](./drawunit_g100_test_cases.md)（按阶段 GR/TX/VC/BL/D2/SW/PF/AP 编号）。
+**实施前验证用例**见 [drawunit_g100_test_cases.md](./drawunit_g100_test_cases.md)（按阶段 GR/TX/VC/BL/D2/SW/PF/AP 编号）。  
+**Checkpoint 验证与提交节奏**见 **§8.8**；结果勾选 [g100_test_results.md](./g100_test_results.md)。
 
 ---
 
-## 9. 能力对照图
+### 8.8 Checkpoint：步步为营验证与提交
+
+> 每个 **CP** = 可编译 + 可跑 demo + 门禁用例 + **lvgl 子模块 1 commit** + **主仓 1 commit** + push。  
+> 脚本：`scripts/verify_g100.sh CP-XX` · 结果表：[g100_test_results.md](./g100_test_results.md)
+
+#### 8.8.1 原则
+
+| 原则 | 做法 |
+|------|------|
+| **双仓顺序** | 先 `lvgl` push → 再主仓 bump 子模块 + `g100_test_results.md` 一行 |
+| **粒度** | 一大 G 阶段可拆 2～4 个 CP；**单 CP 只交付一项能力** |
+| **三门** | ① build ② demo（`RUN_SEC` 或交互）③ 门禁 grep / apitrace |
+| **不攒大包** | 禁止 CP-02+CP-03 混 commit；禁止半套 shader + 半套 mesh |
+| **Tag** | 里程碑 CP 打 annotated tag（见下表） |
+| **不进 git** | `build-*`、`benchmark_logs/` |
+
+#### 8.8.2 CP 与 G 阶段映射
+
+```text
+G0 ✅ CP-00
+G1 → CP-01a (shader) → CP-01b (grad) → CP-01c (fill/image)
+G2 → CP-02
+G3 → CP-03a → CP-03b
+G4 → CP-04a → CP-04b
+G5 → CP-05  [tag: g100-mvp-2d]
+G6 → CP-06  [tag: g100-mvp-3d-blit]     （可与 G1 并行）
+G7 → CP-07a (+ CP-07b 可选 libs/g100)
+G8.0～G8.6 → CP-08 … CP-14            [CP-11: g100-mvp-3d-vp] [CP-14: g100-mvp-3d-full]
+```
+
+#### 8.8.3 Checkpoint 明细
+
+| CP | 阶段 | 代码范围（lvgl 为主） | 验证 | 门禁用例 | 建议 commit 前缀 |
+|:--:|:--:|----------------------|------|----------|------------------|
+| **CP-00** | G0 ✅ | `draw/g100/*` Bootstrap | `verify_g100.sh CP-00` | G0-01～08, PF-01 | `feat(draw): g100 bootstrap` |
+| **CP-01a** | G1 | `lv_g100_shader.c` + context | `CP-01a` + simple_button | 编译；AP shader | `feat(g100): native shader skeleton` |
+| **CP-01b** | G1 | `g100_grad` 脱离 NVG | `CP-01b` + render | **GR-12**, AP-01～03 | `feat(g100): native gradient` |
+| **CP-01c** | G1 | fill/border/image 对齐 | `CP-01c` | D2-01, GR-03～06 | `feat(g100): G1 fill/border/image` |
+| **CP-02** | G2 | `g100_label` + text hash | `CP-02` + stress | TX-02～04, AP-06 | `feat(g100): GPU label hash cache` |
+| **CP-03a** | G3 | vector SOLID/GRAD/dash | `CP-03a` + render | VC-01～03 | `feat(g100): vector core` |
+| **CP-03b** | G3 | PATTERN 平铺 | `CP-03b` | VC-04 | `feat(g100): vector pattern` |
+| **CP-04a** | G4 | Kawase blur >256 | `CP-04a` | BL-03～04 | `feat(g100): kawase blur` |
+| **CP-04b** | G4 | FBO 池 + shadow | `CP-04b` | BL-05～06 | `feat(g100): fbo pool blur/shadow` |
+| **CP-05** | G5 | line/arc/layer/extend | `CP-05` + stress | D2-09～14, SW-01～02 | `feat(g100): G5 complete 2D` → **tag `g100-mvp-2d`** |
+| **CP-06** | G6 | `3D_BLIT` + `3D_SYNC`；gltf demo | `CP-06` | D3-01～05 | `feat(g100): 3D_BLIT composite` → **tag `g100-mvp-3d-blit`** |
+| **CP-07a** | G7 | benchmark/soak 脚本 | `CP-07a` | PF-01～03 | `chore(g100): perf scripts` |
+| **CP-07b** | G7 | 可选 `libs/g100/` | `CP-07b` | 无回归 | `refactor(g100): libs/g100 optional` |
+| **CP-08** | G8.0 | `3D_VIEWPORT` + `3D_CLEAR` + widget | `CP-08` | D3-06, D3-16～17 | `feat(3d): viewport tasks G8.0` |
+| **CP-09** | G8.1 | `3D_LINE` + `3D_CALLBACK` | `CP-09` | D3-07～08, AP-08 | `feat(3d): line/callback G8.1` |
+| **CP-10** | G8.2 | `3D_MESH` + `g100_mesh` | `CP-10` | D3-11, D3-18 | `feat(3d): mesh task G8.2` |
+| **CP-11** | G8.3 | `3D_SCENE`；gltf 迁移 | `CP-11` | D3-19, D3-01 | `feat(3d): scene task G8.3` → **tag `g100-mvp-3d-vp`** |
+| **CP-12** | G8.4 | phong + light | `CP-12` | D3-13 | `feat(3d): phong lights G8.4` |
+| **CP-13** | G8.5 | pick + OBJ loader | `CP-13` | D3-14 | `feat(3d): pick and loader G8.5` |
+| **CP-14** | G8.6 | 3D style/theme | `CP-14` | D3-15 | `feat(3d): theme G8.6` → **tag `g100-mvp-3d-full`** |
+
+#### 8.8.4 标准作业流程（SOP）
+
+```bash
+# 1. 验证
+RUN_SEC=45 ./scripts/verify_g100.sh CP-XX
+
+# 2. 子模块
+cd lvgl && git add … && git commit -m "…" && git push origin wsl_wayland_3d
+
+# 3. 主仓（子模块指针 + g100_test_results.md 一行）
+cd .. && git add lvgl docs/g100_test_results.md
+git commit -m "chore: bump lvgl for CP-XX …"
+git push origin wsl_wayland_3d
+
+# 4. 里程碑 tag（可选）
+git tag -a g100-mvp-2d -m "CP-05 G5 complete 2D"
+git push origin g100-mvp-2d
+```
+
+#### 8.8.5 并行与依赖
+
+| 关系 | 说明 |
+|------|------|
+| CP-06 ∥ CP-01～05 | 3D BLIT 可与 2D 必达并行 |
+| CP-08+ 依赖 CP-06 | 3D task 族需 BLIT 通道先通 |
+| CP-10+ 依赖 CP-01a | mesh 需原生 `g100_shader` |
+| CP-08～09 ∥ CP-07a | 视口开发与 benchmark 可并行 |
+
+#### 8.8.6 回退
+
+| 情况 | 做法 |
+|------|------|
+| CP 未 PASS | 不 push；fix 后同一 CP 一个 commit |
+| 已 push 下一 CP 回归 | 子模块 + 主仓各 `git revert` 该 CP commit |
+| 指针错乱 | 主仓 bump 到 [g100_test_results.md](./g100_test_results.md) 记录的好 SHA |
+
+---
+
 
 ```mermaid
 flowchart LR

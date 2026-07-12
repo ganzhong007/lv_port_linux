@@ -254,8 +254,8 @@ cmake --build build-g100 -j$(nproc)
 | `LVGL_APP_DEMO=g100_verify` | 专用验证屏：TX-02/BL-03/GR-09 单页切换 |
 | `LVGL_APP_DEMO=3dview`（规划） | `lv_demo_3dview`：D3-06～10 |
 | `widgets/3dview/`（规划） | `LV_USE_3DVIEW`；见 integration guide §4.3 |
-| `scripts/verify_g100.sh` | 按 ID 跑 demo + grep 日志 + 可选 apitrace |
-| `docs/g100_test_results.md` | 板级勾选结果表 |
+| `scripts/verify_g100.sh` | 按 **CP-XX** 跑 build+demo+门禁 grep；见 [design §8.8](./drawunit_g100_design.md#88-checkpoint-步步为营验证与提交) |
+| `docs/g100_test_results.md` | **Checkpoint 勾选**结果表（每 CP 一行，随 push 更新） |
 
 ---
 

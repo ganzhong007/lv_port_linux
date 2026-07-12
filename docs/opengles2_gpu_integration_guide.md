@@ -992,7 +992,8 @@ flowchart TB
 | [drawunit_g100_design.md §8](./drawunit_g100_design.md#8-实施阶段g100-专项与总体计划) | **总体实施计划（G0～G8 贯通）**、MVP、3D Task 索引 |
 | [g100_3d_draw_tasks_design.md](./g100_3d_draw_tasks_design.md) | **3D Draw Task 全族**（8 类 task、dsc 字段、VP 子队列，已认可） |
 | [drawunit_g100_design.md](./drawunit_g100_design.md) | **DrawUnitG100** 设计规格、GPU 必达、SW 兜底、架构 §2 |
-| [drawunit_g100_test_cases.md](./drawunit_g100_test_cases.md) | **验证用例**：GR/TX/VC/BL 必达与 SW 兜底 |
+| [g100_test_results.md](./g100_test_results.md) | **Checkpoint 验证结果**勾选表 |
+| [drawunit_g100_design.md §8.8](./drawunit_g100_design.md#88-checkpoint-步步为营验证与提交) | **CP 步步为营**验证与 git push SOP |
 | [gles2_gpu_porting_plan.md](./gles2_gpu_porting_plan.md) | **改造计划**：P0–P5 步骤、子模块/主仓分工 |
 | [lvgl_submodule_code_layout.md](./lvgl_submodule_code_layout.md) | 子模块目录、16 层架构、OpenGLES 调用链、NanoVG 路径澄清、display 纹理改造草案 |
 | [simple_button_guide.md](./simple_button_guide.md) | Wayland SHM/EGL 对比、NanoVG 函数链（已校正 flush 路径） |

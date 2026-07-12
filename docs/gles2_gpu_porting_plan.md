@@ -149,7 +149,7 @@ flowchart LR
 | G0 代码解耦 | ✅ `draw/g100/` 独立符号与编译守卫 | `draw/nanovg/` 仅 NANOVG unit |
 | GPU 必达模块 | 🔲 `g100_grad/label/vector/blur` 原生实现 | Bootstrap 暂用 NanoVG 库后端 |
 | demo / benchmark | ✅ `demos/` | `main.c`、`LVGL_APP_DEMO` |
-| 验证 | — | 按 [test_cases](./drawunit_g100_test_cases.md) 执行 |
+| 验证 | — | 按 [test_cases](./drawunit_g100_test_cases.md) 执行；**Checkpoint** 见 [design §8.8](./drawunit_g100_design.md#88-checkpoint-步步为营验证与提交) |
 | 文档 | API 注释 | `docs/*.md`、`boards/` |
 
 ```mermaid
