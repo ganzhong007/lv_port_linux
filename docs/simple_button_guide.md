@@ -534,8 +534,8 @@ lv_timer_handler()
                  └─ lv_draw_dispatch()
                       └─ lv_draw_nanovg::draw_dispatch()  [lv_draw_nanovg.c]
                            ├─ on_layer_changed()
-                           │    ├─ nvgluBindFramebuffer(FBO)
-                           │    └─ glClear()
+                           │    ├─ 主屏: nvgluBindFramebuffer(NULL)  /* EGL 默认 FB */
+                           │    └─ glClear()（子 layer 才 bind FBO）
                            ├─ nvgBeginFrame()
                            └─ draw_execute()
                                 ├─ lv_draw_nanovg_fill()
@@ -549,14 +549,8 @@ lv_timer_handler()
                                 └─ nvgEndFrame()         → glnvg__renderFlush → glDrawArrays
                  └─ call_flush_cb()
                       └─ egl_flush_cb()                [lv_wayland_backend_egl.c]
-                           ├─ glBindTexture()
-                           ├─ glTexImage2D(..., fb1)    (像素上传到 GL 纹理)
-                           ├─ lv_opengles_render_display()  [lv_opengles_driver.c]
-                           │    ├─ glActiveTexture / glBindTexture
-                           │    ├─ lv_opengles_shader_bind()
-                           │    └─ lv_opengles_render_draw()  → GL 四边形贴图到 EGL surface
                            ├─ lv_opengles_egl_update()
-                           │    └─ eglSwapBuffers()      ← GPU 交换前后缓冲
+                           │    └─ eglSwapBuffers()      ← 主屏已在默认 FB，直接 swap
                            ├─ wl_surface_frame()
                            ├─ wl_surface_damage()
                            └─ wl_surface_commit()
@@ -564,7 +558,7 @@ lv_timer_handler()
                            └─ frame_done() → lv_display_flush_ready()
 ```
 
-> `wayland-egl.defaults` 中 **`LV_USE_DRAW_OPENGLES=0`，`LV_USE_DRAW_NANOVG=1`**，因此走 NanoVG 绘制 + `egl_flush_cb` 里 `eglSwapBuffers` 分支，而非 `LV_USE_DRAW_OPENGLES` 的 `lv_opengles_render_display_texture()` 分支。
+> `wayland-egl.defaults` 中 **`LV_USE_DRAW_OPENGLES=0`，`LV_USE_DRAW_NANOVG=1`**。NanoVG 主屏画在 **EGL 默认 framebuffer**，flush **无** `glTexImage2D(fb1)`（该路径在 `#else` 分支，用于无 NanoVG 的 SW+EGL）。若启用 `LV_USE_DRAW_OPENGLES`，flush 会走 `lv_opengles_render_display_texture()`。Canvas/snapshot 等子场景才可能 `glReadPixels` 读回 CPU。
 
 ---
 

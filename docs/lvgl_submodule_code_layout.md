@@ -504,13 +504,134 @@ flowchart TB
 | **`glad/`** | 动态加载 **libGLESv2 / libEGL**（或桌面 GL） |
 | **`lv_opengles_debug.c`** | `GL_CALL()` 调试包装 |
 
-### `draw/opengles/` 做什么
+### `draw/opengles/` 深度剖析
 
-| 文件 | 职责 |
+`draw/opengles/` 只有 **2 个文件**（`lv_draw_opengles.h` + `lv_draw_opengles.c`），对外 **3 个 API**，实现约 **800 行**。  
+设计与 NanoVG **完全不同**：不是手写每种图元的 GLES 绘制，而是 **「SW 画到 CPU 缓冲 → 上传 GL 纹理 → LRU 缓存 → GPU blit 合成」** 的纹理缓存架构（与 `draw/sdl/` 同类）。
+
+与 **`draw/nanovg`** 二选一，不能同时启用（源码 `#error`）。
+
+#### 文件与 API
+
+| 文件 | 内容 |
 |------|------|
-| **`lv_draw_opengles.c`** | 注册 **OPENGLES draw unit**：把 FILL/LABEL/IMAGE/LAYER/3D 等 draw task 画到 **GPU 纹理**，再合成到 framebuffer |
+| `lv_draw_opengles.h` | 3 个对外函数 |
+| `lv_draw_opengles.c` | unit 注册、调度、纹理缓存、全部 static 实现 |
 
-与 **`draw/nanovg`** 二选一，不能同时启用（源码里有 `#error`）。
+| 对外 API | 作用 |
+|----------|------|
+| `lv_draw_opengles_init()` | 注册 OPENGLES draw unit，创建 LRU 纹理缓存（默认 64 项） |
+| `lv_draw_opengles_deinit()` | 释放 FBO、缓存、临时 CPU 缓冲 |
+| `lv_draw_opengles_clear_layer_area()` | GPU 侧清 layer 纹理脏区（透明背景必需，`lv_refr.c` 调用） |
+
+| 内部 static 函数（主体） | 职责 |
+|--------------------------|------|
+| `dispatch` / `evaluate` | draw unit 调度与竞价（score=0 抢任务） |
+| `execute_drawing` | 按 task 类型路由：快路径 / 缓存 / 不缓存 |
+| `draw_to_texture` | **核心**：递归调 SW → CPU ARGB → `glTexImage2D` |
+| `draw_from_cached_texture` | LRU 查/建缓存 → blit |
+| `draw_to_framebuffer` | 不缓存：draw_to_texture + blit + 删纹理 |
+| `draw_texture_to_framebuffer` | 已有 GL 纹理合成到目标 layer 纹理 |
+| `blend_texture_layer` | LAYER 任务：子 layer 纹理 blend 到父 layer |
+| `create_texture` / `get_framebuffer` / `layer_get_texture` | GL 资源管理 |
+| `opengles_texture_cache_*` | 缓存 create/compare/free 回调 |
+| `lv_draw_opengles_3d` | 3D texture（`LV_USE_3DTEXTURE`）直调 `lv_opengles_render` |
+
+#### 核心数据结构
+
+| 字段 | 含义 |
+|------|------|
+| `lv_draw_opengles_unit_t.texture_cache` | LRU，key = 宽高 + draw_dsc 字节内容 |
+| `lv_draw_opengles_unit_t.render_draw_buf` | 临时 ARGB8888 CPU 缓冲，供递归 SW 绘制 |
+| `lv_draw_opengles_unit_t.framebuffer` | 共享 FBO，off-screen 渲染到任意纹理 |
+| `layer->user_data` | 该 layer 的 **GL 纹理 id**（非 CPU 像素） |
+| `cache_data_t` | `{ draw_dsc 拷贝, w, h, texture }` |
+
+启用 `LV_USE_DRAW_OPENGLES` 时，display 的 `draw_buf` 是 **dummy 占位**（`lv_opengles_texture.c` 里 `static dummy_buf`），真实像素在 **GPU 纹理**。
+
+#### `user_data` 标记：OpenGLES 自己不画像素
+
+`evaluate` 只抢 `draw_dsc->user_data == NULL` 的任务（score=0）。  
+`draw_to_texture` 递归调用 `lv_draw_rect/label/image...` 前设 **`user_data = (void*)1`**，使子 task 落回 **SW** 写入 `render_draw_buf`。  
+OpenGLES unit 的角色是 **orchestrate（SW + GL 上传 + 合成）**，而非实现图元。
+
+#### `execute_drawing` 路由
+
+```mermaid
+flowchart TD
+    A["execute_drawing(task)"] --> B{task 类型?}
+
+    B -->|FILL 纯色无圆角无渐变| C["glScissor + glClear<br/>或 lv_opengles_render_fill"]
+    B -->|LAYER| D["blend_texture_layer"]
+    B -->|3D| E["lv_draw_opengles_3d"]
+    B -->|IMAGE 可修改 / LABEL 非 static / LINE 用 points| F["draw_to_framebuffer 不缓存"]
+    B -->|其他| G["draw_from_cached_texture"]
+
+    G --> H{LRU 命中?}
+    H -->|是| I["draw_texture_to_framebuffer"]
+    H -->|否| J["draw_to_texture: SW→CPU→glTexImage2D"]
+    J --> I
+    F --> K["draw_to_texture + blit + glDeleteTextures"]
+```
+
+| 路径 | 说明 |
+|------|------|
+| **纯色 FILL 快路径** | 直接在 layer 纹理上 `glClear`；半透明用 `lv_opengles_render_fill`（注释：shader fill 在 EGL 上不可靠） |
+| **draw_to_texture** | 支持 FILL/BORDER/BOX_SHADOW/LABEL/ARC/LINE/TRIANGLE/IMAGE；不支持 VECTOR/BLUR/MASK 等 |
+| **不缓存** | 可修改 IMAGE、`text_static=false` 的 LABEL、`points` 动态 LINE（防 stale/野指针） |
+| **LAYER** | 子 layer 纹理 blend 后 **删除源纹理** |
+| **3D** | 直调 `drivers/opengles` 的 `lv_opengles_render()` |
+
+quad 绘制、shader、blend 在 **`drivers/opengles/lv_opengles_driver.c`**；`draw/opengles` 只管 **任务调度 + 纹理生命周期**。
+
+#### 透明背景：`lv_draw_opengles_clear_layer_area`
+
+CPU `lv_draw_buf_clear` 清不到 GPU 纹理。`lv_refr.c` 在透明屏刷新前，对 `layer_head->user_data != NULL` 的 display 调 GPU scissor + `glClearColor(0,0,0,0)`。
+
+#### 与 NanoVG draw unit 对比
+
+| 维度 | `draw/opengles` | `draw/nanovg` |
+|------|-----------------|---------------|
+| 文件 | 2 个（单 .c） | 10+ 个（每图元一文件） |
+| 谁画像素 | **SW → CPU → 上传纹理** | **NanoVG GPU 矢量光栅** |
+| layer 输出 | **GL 纹理**（`layer->user_data`，常驻 GPU） | **主屏**：EGL 默认 FB（GPU）；**子 layer**：FBO 纹理；**canvas/snapshot** 才 ReadPixels |
+| flush | `render_display_texture` + swap | **NanoVG 配置**：直接 `eglSwapBuffers`（无整屏 glTexImage2D） |
+| 缓存 | LRU **纹理**缓存（按 draw_dsc） | FBO / image / letter 缓存 |
+| 本仓库 | ❌（`glfw-3d.defaults` 等） | ✅ wayland-egl |
+
+> **易误解**：NanoVG **主屏每帧**并非 `FBO → ReadPixels → glTexImage2D`。详见下文「wayland-egl + NanoVG 路径澄清」。
+
+#### OpenGLES draw unit 一帧数据流
+
+```mermaid
+sequenceDiagram
+    participant W as widgets
+    participant R as core/refr
+    participant O as draw/opengles
+    participant S as draw/sw
+    participant D as drivers/opengles
+    participant EGL as eglSwapBuffers
+
+    W->>R: invalidate → refr
+    R->>O: evaluate score=0
+    O->>O: execute_drawing
+
+    alt 纯色 FILL
+        O->>D: glClear / render_fill → layer 纹理
+    else 复杂图元
+        O->>S: lv_draw_* (user_data=1) → render_draw_buf
+        S->>O: CPU ARGB
+        O->>D: glTexImage2D + render_texture → layer 纹理
+    end
+
+    R->>D: flush render_display_texture
+    D->>EGL: swap
+```
+
+#### 取舍
+
+**优点**：代码少、复用 SW 全图元；纹理缓存减重复绘制；flush 用 display 纹理 blit（`LV_USE_DRAW_OPENGLES` 路径）。  
+**代价**：缓存未命中仍 SW+上传；Canvas/非 refr 场景拒绝；`blend_texture_layer` rotation 为 TODO；与 NanoVG 互斥。
 
 ### 谁调用 OpenGLES（调用方 → 被调模块）
 
@@ -518,7 +639,7 @@ flowchart TB
 
 | 调用方 | 调用的 API / 模块 | 场景 |
 |--------|-------------------|------|
-| **`drivers/wayland/lv_wayland_backend_egl.c`** | `lv_opengles_egl_context_create/destroy`<br>`lv_opengles_texture_*`<br>`lv_opengles_render_display`<br>`lv_opengles_egl_update` | **WSLg wayland-egl 主路径**：flush 时把纹理送到屏幕 |
+| **`drivers/wayland/lv_wayland_backend_egl.c`** | `lv_opengles_egl_context_create/destroy`<br>`lv_opengles_texture_*`<br>`lv_opengles_egl_update` | **WSLg wayland-egl**：NanoVG 时 flush 仅 swap；Draw_OpenGLES 时 `render_display_texture` |
 | **`drivers/sdl/lv_sdl_egl.c`** | 同上 | SDL + EGL 后端 |
 | **`drivers/display/drm/lv_linux_drm_egl.c`** | 同上 | DRM/KMS + EGL |
 | **`drivers/opengles/lv_opengles_glfw.c`** | `lv_opengles_init`<br>`lv_opengles_render_texture_rbswap` | 桌面 GLFW 模拟器 |
@@ -580,21 +701,145 @@ flowchart BT
 | **LVGL 内部** | `stdlib`（内存）、`misc`（矩阵/区域）、`display`（layer 纹理 id 存在 `layer->user_data`） |
 | **NanoVG** | 不经过 `lv_opengles_render()`，但共用 **同一 EGL Context** |
 
-### 本仓库 wayland-egl 实际调用链
+### 本仓库 wayland-egl 实际调用链（已按源码校正）
+
+#### NanoVG 主屏（`configs/wayland-egl.defaults`，当前默认）
 
 ```
 lv_timer_handler
   → core/refr
-  → draw/nanovg（2D：NanoVG → GL FBO → glReadPixels → CPU draw_buf）
+  → draw/nanovg
+       on_layer_changed: layer_head->user_data==NULL → nvgluBindFramebuffer(NULL)  /* EGL 默认 FB */
+       nvgBeginFrame → draw_execute → nvgEndFrame → glnvg__renderFlush (GPU)
   → draw/nanovg_3d（若有 3dtexture：end NanoVG → lv_opengles_render）
   → display flush_cb
-  → drivers/wayland/egl_flush_cb
-       → glTexImage2D（CPU 像素 → display 纹理）  或  LV_USE_DRAW_OPENGLES 时 lv_opengles_render_display_texture
+  → drivers/wayland/egl_flush_cb   /* #if LV_USE_DRAW_OPENGLES || LV_USE_DRAW_NANOVG */
+       → （NanoVG：无 glTexImage2D）
        → lv_opengles_egl_update（eglSwapBuffers）
        → wl_surface_commit → WSLg
 ```
 
+- **`fb1` / `layer->draw_buf`**：仍由 `lv_opengles_texture.c` 分配以满足 LVGL display 抽象，**主屏 NanoVG 不写入**；`flush_cb` 的 `px_map` 被 `LV_UNUSED`。
+- **`glReadPixels`**：仅 `on_layer_readback()`，由 canvas / snapshot 等触发 `LV_EVENT_SCREEN_LOAD_START` + `lv_layer_t*`，针对**带子 FBO 的 layer**，**不是**每帧主屏路径。
+- **子 layer 合成**：`lv_draw_nanovg_layer.c` 用 FBO 纹理作 `nvgImage` 直接 GPU 合成，**无需 ReadPixels**。
+
+#### 对比：三条 EGL 相关 flush 路径
+
+| 配置 | 绘制 | flush |
+|------|------|-------|
+| **wayland-egl + NanoVG**（本仓库） | NanoVG → **EGL 默认 FB** | **仅 swap** |
+| **wayland-egl + Draw_OpenGLES** | 纹理合成 → `layer_head->user_data` 纹理 | `render_display_texture` + swap |
+| **OpenGLES 驱动、无 NanoVG/Draw_OpenGLES** | SW → `fb1` CPU | `glTexImage2D(fb1)` + `render_display` + swap |
+
+#### stress 测试里 EGL 为何仍慢于 SHM？
+
+与「整屏 ReadPixels + glTexImage2D」无关，更主要是：
+
+- NanoVG **render**（~11.6 ms）：矢量 tessellation、stencil、`nvgEndFrame` 批量提交
+- **flush**（~29.3 ms）：`eglSwapBuffers` + Wayland frame callback + WSLg compositor
+- WSL **Mesa D3D12** GLES 栈开销；CPU ~51% 多为驱动/同步
+
 **wayland-shm** 路径完全不经过 `drivers/opengles`，CPU 像素直送 `wl_shm`。
+
+---
+
+### wayland-egl + NanoVG：为何不改成 display 纹理常驻 GPU？
+
+**结论**：主屏已是 GPU 直出 + swap，并非每帧 CPU↔GPU 往返；与 OpenGLES draw unit 的差异在于 **layer 抽象 / flush 模型**，不是 NanoVG 画不出来纹理。
+
+| 维度 | 现状（NanoVG 主屏） | OpenGLES draw unit |
+|------|---------------------|-------------------|
+| 绘制目标 | EGL **默认 framebuffer** | **display 纹理**（FBO attach） |
+| `layer_head->user_data` | NULL（NanoVG 时不写入 texture id） | texture id |
+| flush | 直接 swap | 纹理 blit 到 surface 再 swap |
+| fb1 | 占位，主屏不用 | dummy buf |
+
+**尚未统一为 display 纹理的原因**（工程取舍，非技术禁令）：
+
+1. **主屏已较直接**：再经 display 纹理 blit 可能多一次全屏 quad，未必更快。
+2. **LVGL 核心仍围绕 CPU `draw_buf`**：partial/tile、`lv_draw_buf_clear`、RGB565 等；Draw_OpenGLES 已做 dummy buf + GPU clear workaround（`lv_refr.c` #9912）。
+3. **Canvas / Snapshot 仍需 ReadPixels**：无法从架构上彻底去掉，只能缩小触发面。
+4. **两条 draw unit 互斥**：NanoVG 与 Draw_OpenGLES 是产品线分叉，未回灌到 NanoVG 主路径。
+5. **改造面大**：tile layer、`user_data` 语义、透明背景 GPU clear、NanoVG ↔ opengles_driver GL 状态（3D 已有 `reinit_state` 问题）。
+
+---
+
+### 改造方案草案：NanoVG 主屏绑定 display 纹理
+
+> 目标：主 layer 与 Draw_OpenGLES 对齐——像素常驻 `display->layer_head->user_data` 纹理，flush 走 `render_display_texture`；**保留** canvas/snapshot 的 ReadPixels 退路。
+
+#### 阶段 0：基线与验证
+
+| 项 | 做法 |
+|----|------|
+| 分支 | `wsl_wayland_3d` 或 `feat/nanovg-display-texture` |
+| 基线 FPS | `./scripts/benchmark_stress_shm_vs_egl.sh 45 1600 960 10` |
+| 确认路径 | layer trace / apitrace：`egl_flush_cb` 无 `glTexImage2D`；主屏无 `glReadPixels` |
+| 用例 | stress、simple_button、canvas、snapshot、带 layer 的 widget |
+
+#### 阶段 1：display 纹理与 layer 绑定
+
+| 文件 | 改动 |
+|------|------|
+| `drivers/opengles/lv_opengles_texture.c` | `#if LV_USE_DRAW_NANOVG` 时也执行 `display->layer_head->user_data = texture_id`（或新宏 `LV_NANOVG_USE_DISPLAY_TEXTURE`） |
+| `draw/nanovg/lv_draw_nanovg.c` `on_layer_changed()` | 主 layer（`user_data` 为 texture id）时：FBO attach display 纹理，而非 `nvgluBindFramebuffer(NULL)` |
+| `draw/nanovg/lv_draw_nanovg.c` | 区分 **display 纹理 id** 与 **FBO cache entry**（子 layer 仍用 `lv_nanovg_fbo_cache`） |
+
+#### 阶段 2：flush 与 refr 对齐
+
+| 文件 | 改动 |
+|------|------|
+| `drivers/wayland/lv_wayland_backend_egl.c` | NanoVG + display 纹理模式：`egl_flush_cb` 内调用 `lv_opengles_render_display()` 再 swap（与 Draw_OpenGLES 同段代码） |
+| `core/lv_refr.c` | 透明背景：复用或泛化 `lv_draw_opengles_clear_layer_area` 为 draw-unit 无关的 GPU clear（NanoVG 主屏 `user_data` 非 NULL 后生效） |
+| `drivers/display/drm/lv_linux_drm_egl.c` | 与 wayland 同步 |
+
+#### 阶段 3：边界场景
+
+| 场景 | 策略 |
+|------|------|
+| **Tile 渲染** | `lv_refr.c` 临时 tile layer 的 `user_data` 为 NULL——需明确 tile 是画到 display 纹理子区域还是仍走默认 FB |
+| **Partial 模式** | wayland-egl 当前为 `RENDER_MODE_FULL`；若支持 partial，需 scissor + 局部 FBO |
+| **Canvas / Snapshot** | 保持 `on_layer_readback` + `glReadPixels`；不改动 |
+| **子 layer LAYER task** | 继续 FBO + `lv_draw_nanovg_layer` GPU 合成 |
+| **3D texture** | 验证 `lv_draw_nanovg_3d.c` 与 display FBO 切换时的 `lv_opengles_reinit_state` |
+| **旋转** | `lv_opengles_render_display` 已处理 rotation；NanoVG viewport 需一致 |
+
+#### 阶段 4：配置与回退
+
+```c
+/* lv_conf / configs/wayland-egl.defaults 建议新增 */
+#define LV_NANOVG_RENDER_TO_DISPLAY_TEXTURE 1  /* 0 = 现行默认 FB 路径 */
+```
+
+- `0`：保持现有行为，便于 A/B。
+- `1`：启用 display 纹理路径。
+
+#### 阶段 5：验收标准
+
+| 指标 | 期望 |
+|------|------|
+| 功能 | stress / widgets / 3dtexture / canvas 无回归 |
+| 性能 | stress 1600×960×10：对比改造前后 render/flush/FPS（**不保证一定更快**——若 blit 增加开销可能持平或略慢） |
+| 路径 | apitrace 可见主屏 bind display FBO；flush 有 `render_display`；主帧仍无 `glReadPixels` |
+
+#### 风险与回滚
+
+| 风险 | 缓解 |
+|------|------|
+| 多一次全屏 blit 反而变慢 | A/B 宏默认关；benchmark 数据驱动 |
+| GL 状态冲突 NanoVG ↔ opengles shader | flush 前 `lv_opengles_reinit_state`；单线程 dispatch |
+| tile/user_data 语义冲突 | 阶段 3 单测 + stress 大图 |
+
+#### 建议实施顺序（文件依赖）
+
+```mermaid
+flowchart LR
+    A["lv_opengles_texture.c<br/>绑定 user_data"] --> B["on_layer_changed<br/>FBO→display 纹理"]
+    B --> C["egl_flush_cb<br/>render_display_texture"]
+    C --> D["lv_refr GPU clear"]
+    D --> E["tile/canvas/3d 回归"]
+    E --> F["benchmark + 文档"]
+```
 
 ### 一句话对照
 
@@ -604,6 +849,126 @@ lv_timer_handler
 | **`draw/opengles/`** | 用 GLES 做 **完整 2D draw unit**（替代 NanoVG） | ❌ |
 | **`draw/nanovg/`** | 2D 用 NanoVG 画，**共享** GL 上下文 | ✅ |
 | **`libs/gltf/`** | 3D 模型，直接用 GL + shader | 仅 `LV_USE_GLTF=1` 时 |
+
+---
+
+## Draw Unit 全览与对比
+
+LVGL v9 的 **Draw Unit** 是 `lv_draw.c` 调度体系中的**可插拔渲染后端**：每个 unit 注册 `evaluate_cb`（能否接任务、优先级）和 `dispatch_cb`（执行绘制）。  
+同一帧内**可同时存在多个 unit**，按 `preference_score` **数值越小优先级越高**（SW 兜底为 100；GPU 专用 unit 常见 70–80；OpenGLES/SDL/EVE 等可设为 0 抢占）。
+
+### 全部 12 个 Draw Unit
+
+| # | 注册名 | 源码路径 | 配置宏 | 初始化入口 |
+|---|--------|----------|--------|------------|
+| 1 | **SW** | `draw/sw/` | `LV_USE_DRAW_SW`（默认 1） | `lv_init()` → `lv_draw_sw_init()` |
+| 2 | **NANOVG** | `draw/nanovg/` + `libs/nanovg/` | `LV_USE_DRAW_NANOVG` + `LV_USE_NANOVG` | `lv_opengles_init()` 内（需 `LV_USE_OPENGLES`） |
+| 3 | **OPENGLES** | `draw/opengles/` | `LV_USE_DRAW_OPENGLES` + `LV_USE_OPENGLES` | `lv_init()` → `lv_draw_opengles_init()` |
+| 4 | **VG_LITE** | `draw/vg_lite/` | `LV_USE_DRAW_VG_LITE` | `lv_init()` → `lv_draw_vg_lite_init()` |
+| 5 | **NEMA_GFX** | `draw/nema_gfx/` + `libs/nema_gfx/` | `LV_USE_NEMA_GFX` | `lv_init()` → `lv_draw_nema_gfx_init()` |
+| 6 | **NXP_PXP** | `draw/nxp/pxp/` | `LV_USE_DRAW_PXP`（需 `LV_USE_PXP`） | `lv_init()` → `lv_draw_pxp_init()` |
+| 7 | **G2D** | `draw/nxp/g2d/` | `LV_USE_DRAW_G2D`（需 `LV_USE_G2D`） | `lv_init()` → `lv_draw_g2d_init()` |
+| 8 | **DMA2D** | `draw/dma2d/` | `LV_USE_DRAW_DMA2D` | `lv_init()` → `lv_draw_dma2d_init()` |
+| 9 | **DAVE2D** | `draw/renesas/dave2d/` | `LV_USE_DRAW_DAVE2D` | `lv_init()` → `lv_draw_dave2d_init()` |
+| 10 | **SDL** | `draw/sdl/` | `LV_USE_DRAW_SDL` | `lv_init()` → `lv_draw_sdl_init()` |
+| 11 | **ESP_PPA** | `draw/espressif/ppa/` | `LV_USE_PPA` | `lv_init()` → `lv_draw_ppa_init()` |
+| 12 | **EVE** | `draw/eve/` | `LV_USE_DRAW_EVE` | `lv_init()` → `lv_draw_eve_init()` |
+
+> **注意**：NanoVG unit 不在 `lv_init.c` 里直接 init，而是在 **`drivers/opengles/lv_opengles_driver.c`** 的 `lv_opengles_init()` 中调用 `lv_draw_nanovg_init()`，以保证 GL 上下文已就绪。
+
+### 总对比表
+
+| Draw Unit | 硬件/运行时 | 输出目标 | 典型 preference | 与本仓库关系 |
+|-----------|-------------|----------|-----------------|--------------|
+| **SW** | CPU（可选 NEON/Helium/RVV 加速 blend） | layer `draw_buf` 内存像素 | 100（兜底） | **wayland-shm 主路径**；egl 下作 fallback |
+| **NANOVG** | GPU OpenGL/GLES（矢量 raster） | **主屏**：EGL 默认 FB；**子 layer**：FBO 纹理；ReadPixels 仅 canvas/snapshot | 80 | **wayland-egl 主路径** |
+| **OPENGLES** | GPU GLES 纹理缓存 | GL texture（少读回 CPU） | 0 | glfw-3d 配置；与 NanoVG **互斥** |
+| **VG_LITE** | Vivante VG-Lite IP | VG-Lite 目标缓冲 | 80 | 未启用（嵌入式 SoC） |
+| **NEMA_GFX** | Think Silicon Nema GPU | Nema 命令流 | 80 | 未启用（STM32U5 等） |
+| **NXP_PXP** | NXP PXP 2D 引擎 | 物理连续 frame buffer | 70 | 未启用（i.MX RT）；可与 SW 共存 |
+| **G2D** | NXP G2D 2D 引擎 | dmabuf 映射缓冲 | 70 | `wayland-g2d.defaults` 可选 |
+| **DMA2D** | STM32 Chrom-ART | SRAM/SDRAM 像素 | 视条件 | 未启用（STM32H7 等） |
+| **DAVE2D** | Renesas D/AVE 2D | D/AVE 帧缓冲 | 0 | 未启用（RA 系列 MCU） |
+| **SDL** | SDL Renderer 纹理 | SDL texture | 0 | SDL 后端可选 |
+| **ESP_PPA** | ESP32-P4 PPA 加速器 | PPA 目标格式 | ~70 | 未启用（Espressif） |
+| **EVE** | FT81x/82x 显示协处理器 | EVE 显存（RAM_G） | 0 | 未启用（SPI 屏） |
+
+### 任务类型支持矩阵（● 支持，○ 部分/有条件，— 不支持）
+
+| 任务类型 | SW | NanoVG | OpenGLES | VG-Lite | Nema | PXP | G2D | DMA2D | DAVE2D | SDL | PPA | EVE |
+|----------|:--:|:------:|:--------:|:-------:|:----:|:---:|:---:|:-----:|:------:|:---:|:---:|:---:|
+| FILL | ● | ● | ● | ● | ● | ● | ● | ○ 纯色 | ● | ● | ○ | ● |
+| BORDER | ● | ● | ● | ● | — | — | — | — | ● | ● | — | ● |
+| BOX_SHADOW | ● | ● | ● | ○ | — | — | — | — | — | ● | — | — |
+| LABEL/LETTER | ● | ● | ● | ● | ● | — | — | — | ● | ● | — | ● |
+| IMAGE | ● | ● | ● | ○ | ● | ○ | ○ 暂禁 | ○ 简单 | ● | ● | ○ | ● |
+| ARC | ● | ● | ● | ○ | ○ | — | — | — | ● | ● | — | ● |
+| LINE | ● | ● | ● | ● | — | — | — | — | ● | ● | — | ● |
+| TRIANGLE | ● | ● | ● | ● | ○ | — | — | — | ● | ● | — | ○ |
+| LAYER | ● | ● | ● | ● | ● | ○ | — | — | ○ | ● | — | — |
+| MASK_RECT | ● | ● | ● | ● | — | — | — | — | — | ● | — | — |
+| VECTOR | ● | ● | — | ● | ○ | — | — | — | — | ● | — | — |
+| BLUR | ● | ○ 需 FBO | — | — | — | — | — | — | — | — | — | — |
+| 3D | — | ● | ● | — | — | — | — | — | — | — | — | — |
+
+「○ 部分」常见限制：无圆角/无渐变、无旋转缩放、特定 color format、需 dmabuf 等。
+
+### 调度机制（多 unit 如何协作）
+
+```mermaid
+flowchart LR
+    W["widgets 产生 draw task"]
+    F["lv_draw_finalize_task_creation"]
+    E["遍历所有 unit.evaluate_cb"]
+    S["按 preference_score 选 unit"]
+    D["unit.dispatch_cb 执行"]
+    FB["SW 兜底 score=100"]
+
+    W --> F --> E --> S --> D
+    E --> FB
+```
+
+1. 新建 task 时 `preference_score` 初值 **100**，`preferred_draw_unit_id = 0`。
+2. 每个已注册 unit 的 `evaluate_cb` 若愿意接手，会把 score **改低** 并写入自己的 unit id。
+3. **SW** 几乎接受所有任务（score 保持 100），专用 GPU unit 用更低 score **抢占**简单任务。
+4. 复杂/不支持的任务自然落回 **SW**（本仓库 wayland-egl 下 NanoVG 处理大部分 2D，SW 补漏）。
+
+### 互斥与组合关系
+
+| 关系 | 说明 |
+|------|------|
+| **NanoVG ⊥ OpenGLES draw unit** | 源码 `#error`，二者不能同时 `=1` |
+| **NanoVG → 依赖 OpenGLES 驱动** | wayland-egl / drm-egl 需 `LV_USE_OPENGLES=1` 提供 EGL/GL 上下文 |
+| **OpenGLES draw unit → 依赖 OpenGLES 驱动** | 同上，纹理绘制走 `drivers/opengles` |
+| **SW + 任意 GPU unit** | ✅ 常见组合：GPU 吃热点，SW 兜底 |
+| **SW + NanoVG** | ✅ wayland-egl 实际配置 |
+| **SW alone** | ✅ wayland-shm |
+
+### 本仓库各 config 使用的 Draw Unit
+
+| 配置文件 | 启用的 Draw Unit | 说明 |
+|----------|------------------|------|
+| `configs/wayland.defaults` | **SW** | SHM 纯 CPU 绘制 |
+| `configs/wayland-egl.defaults` | **SW + NANOVG** | GPU 绘制 + CPU fallback；flush 走 `drivers/opengles` |
+| `configs/glfw-3d.defaults` | **SW + OPENGLES** | 桌面 GLFW，纹理缓存路径 |
+| `configs/wayland-g2d.defaults` | **SW + G2D** | NXP G2D 加速（若平台有 G2D） |
+| `configs/drm-egl-2d/3d.defaults` | **SW + NANOVG**（2d）或 **OPENGLES**（3d） | DRM/KMS + EGL |
+
+### 选型速记
+
+| 场景 | 推荐 Draw Unit |
+|------|----------------|
+| 无 GPU / 最简单移植 | **SW** |
+| Linux 桌面/WSLg + EGL | **NanoVG**（本仓库 wayland-egl） |
+| 全 GL 纹理、少 CPU 读回 | **OpenGLES draw unit**（与 NanoVG 二选一） |
+| NXP i.MX 带 PXP/G2D | **PXP / G2D** + SW |
+| STM32 H7 | **DMA2D** + SW |
+| STM32U5 + Nema | **NEMA_GFX** + SW |
+| Vivante GPU | **VG_LITE** + SW |
+| Renesas RA | **DAVE2D** + SW |
+| SDL 模拟器 | **SDL** 或 SW |
+| FT81x SPI 屏 | **EVE** |
+| ESP32-P4 | **ESP_PPA** + SW |
 
 ---
 
@@ -624,6 +989,8 @@ lv_timer_handler
 | stress / widgets demo | `demos/` |
 | Wayland SHM / EGL 后端 | `src/drivers/wayland/` |
 | OpenGLES 驱动（EGL/纹理/flush） | `src/drivers/opengles/` |
-| OpenGLES draw unit（替代 NanoVG） | `src/draw/opengles/` |
+| OpenGLES draw unit（替代 NanoVG） | `src/draw/opengles/`（见「draw/opengles 深度剖析」） |
+| NanoVG 路径澄清 / display 纹理改造 | 本文「wayland-egl 实际调用链」与「改造方案草案」 |
+| 全部 Draw Unit 对比 | 本文「Draw Unit 全览与对比」 |
 | NanoVG 绘制 | `src/draw/nanovg/` + `src/libs/nanovg/` |
 | 构建选项从哪来 | 主仓 `configs/*.defaults` → 生成 `lv_conf.h` |
