@@ -274,9 +274,11 @@ case "${CP}" in
     log "Optional: full perf regression ./scripts/benchmark_g100.sh 60 120"
     ;;
   CP-08)
-    cmake_build 3dview
+    cmake_build 3dviewport
     [[ "${BUILD_ONLY}" == true ]] && exit 0
     RUN_SEC="${RUN_SEC:-30}" run_demo 3dviewport
+    grep_gate 'G100 3D viewport ready' 'G8.0 3D viewport init'
+    grep_gate 'DrawUnitG100 ready' 'G100 unit active under 3dviewport'
     log "Gates D3-06, D3-16~17 (apitrace VP+resolve)"
     ;;
   CP-09)
