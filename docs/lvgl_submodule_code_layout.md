@@ -164,6 +164,251 @@ indev/ ──事件──► core/ ──invalidate──► draw/ ──像素�
 
 ---
 
+## LVGL 软件技术架构图 + 16 个子目录映射
+
+以下在经典 **「应用 → 核心 → 绘制 → 显示 → 驱动 → 硬件」** 分层上，标注 `lvgl/src/` 下 16 个文件夹各自所在位置与相互关系（与 `hgz.md` / 官方文档中的 L1–L6 分层一致）。
+
+### 总架构图（分层 + 16 目录）
+
+```mermaid
+flowchart TB
+    subgraph APP["应用空间（主仓 lv_port_linux/src，不在 lvgl 子模块内）"]
+        main["main.c / demo"]
+    end
+
+    subgraph L4W["L4 控件与布局层"]
+        widgets["widgets/"]
+        layouts["layouts/"]
+        themes["themes/"]
+        others["others/"]
+    end
+
+    subgraph L1["L1 核心运行时"]
+        core["core/"]
+        indev["indev/"]
+        display["display/"]
+    end
+
+    subgraph L2L3["L2–L3 绘制引擎"]
+        draw["draw/"]
+        font["font/"]
+        libs["libs/"]
+    end
+
+    subgraph L56["L5–L6 平台驱动"]
+        drivers["drivers/"]
+    end
+
+    subgraph CROSS["横切基础设施（全层依赖）"]
+        misc["misc/"]
+        stdlib["stdlib/"]
+        osal["osal/"]
+        tick["tick/"]
+    end
+
+    subgraph DBG["可观测性（旁路挂载）"]
+        debugging["debugging/"]
+    end
+
+    subgraph HW["硬件 / OS（WSLg 示例）"]
+        wslg["Wayland compositor + GPU"]
+    end
+
+    main -->|"lv_* API 调用"| core
+    main --> widgets
+
+    widgets --> core
+    layouts --> core
+    themes --> widgets
+    others --> core
+
+    indev -->|"事件 / 命中"| core
+    core -->|"lv_obj_invalidate"| core
+    core -->|"lv_display_refr_*"| draw
+    draw -->|"draw_buf / layer"| display
+    display -->|"flush_cb"| drivers
+    drivers --> wslg
+
+    widgets -->|"DRAW_MAIN 产生 draw task"| draw
+    font --> draw
+    libs --> draw
+    libs --> drivers
+
+    misc --> core
+    misc --> draw
+    misc --> widgets
+    stdlib --> core
+    stdlib --> draw
+    osal --> draw
+    tick --> core
+    tick --> misc
+
+    debugging -.->|"sysmon 统计 FPS"| core
+    debugging -.-> display
+```
+
+### 同一架构的 ASCII 简图
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Application（主仓 main.c / demos/）                         │
+└───────────────────────────┬─────────────────────────────────┘
+                            │ API
+┌───────────────────────────▼─────────────────────────────────┐
+│  L4  widgets/  layouts/  themes/  others/                   │
+└───────────────────────────┬─────────────────────────────────┘
+                            │ 对象树 / 事件 / invalidate
+┌───────────────────────────▼─────────────────────────────────┐
+│  L1  core/  ←── indev/ ←── drivers/(evdev, wayland indev)   │
+│       │                                                      │
+│       └──► draw/ ◄── font/  libs/(nanovg, thorvg, png…)     │
+│              │                                               │
+│              └──► display/ ──flush──► drivers/(wayland, egl)  │
+└───────────────────────────┬─────────────────────────────────┘
+                            ▼
+                     WSLg / LCD / GPU
+
+  横切：misc/  stdlib/  osal/  tick/  ──► 贯穿以上各层
+  旁路：debugging/(sysmon) ──► 观测 refr / flush 性能
+```
+
+---
+
+### 16 个文件夹在架构中的「层级归属」
+
+| 层级 | 架构角色 | 包含的 src 子目录 | 在系统中的位置 |
+|------|----------|-------------------|----------------|
+| **L4 应用 UI** | 控件、布局、主题 | `widgets/` `layouts/` `themes/` `others/` | 开发者直接创建的 button、label、flex 容器；**不**直接碰硬件 |
+| **L1 核心** | 对象模型、刷新、输入抽象 | `core/` `indev/` `display/` | 承上启下：`core` 调度刷新；`display` 管 buffer 与 flush；`indev` 管输入语义 |
+| **L2–L3 绘制** | Draw task、渲染后端、资源 | `draw/` `font/` `libs/` | 把「画什么」变成像素；`libs` 为 draw/drivers 提供 NanoVG、解码器等 |
+| **L5–L6 驱动** | OS/GPU/输入 HAL | `drivers/` | Wayland SHM/EGL、OpenGLES 纹理、evdev；**唯一**与 WSLg 对话的层 |
+| **横切** | 时间、内存、OS、工具 | `misc/` `stdlib/` `osal/` `tick/` | 被几乎所有模块 include；无独立业务 UI |
+| **旁路** | 调试与测试 | `debugging/` | 挂接在 refr/flush 链路上报指标，不改变主数据流 |
+
+根级 `lv_init.c` 在**最顶层**调用顺序上先于各层：初始化 `stdlib` → `tick` → `draw` → `display` → `indev` → `widgets` 等子系统。
+
+---
+
+### 文件夹之间的依赖关系（谁依赖谁）
+
+#### 1. 纵向主链路（一帧 UI 更新）
+
+```
+tick/ + misc/(timer)
+    → core/(lv_timer_handler → lv_refr)
+        → widgets/ + layouts/（DRAW_MAIN 回调里 lv_draw_*）
+            → draw/（add_task → dispatch → sw|nanovg|opengles）
+                → font/ + libs/（glyph、图片、矢量）
+            → display/（layer、draw_buf）
+                → drivers/（flush → Wayland commit / eglSwapBuffers）
+```
+
+- **单向为主**：数据与像素从 `widgets` 向下流到 `drivers`，flush 完成后 `display` 回调 `core` 进入下一帧。
+- **`indev/`** 与主链路**并行向上**：`drivers` 读输入 → `indev` → `core` 事件 → `widgets` 回调 → 再次 `invalidate`，进入下一轮 refr。
+
+#### 2. 横向协作（同层或相邻层）
+
+| 关系 | 目录 A | 目录 B | 说明 |
+|------|--------|--------|------|
+| 组合 | `widgets/` | `layouts/` | 容器用 flex/grid 排列子 widget |
+| 样式 | `themes/` | `widgets/` | 主题给控件提供默认 `lv_style` |
+| 文本 | `widgets/label` | `font/` | Label 通过 draw 层拉取 font glyph |
+| 图像 | `widgets/image` | `libs/` + `draw/` | 解码（png/jpeg 在 libs）→ draw task |
+| GPU 路径 | `draw/nanovg` | `libs/nanovg` | NanoVG 库源码在 libs，执行在 draw |
+| EGL 路径 | `draw/nanovg` | `drivers/opengles` | NanoVG 帧结束后 OpenGLES flush |
+| Wayland | `drivers/wayland` | `display/` | 注册 `flush_cb`，创建 indev |
+| 扩展 | `others/` | `core/` | fragment 等复用对象树与事件机制 |
+
+#### 3. 横切依赖（被多处引用）
+
+| 目录 | 典型被谁使用 | 提供什么 |
+|------|--------------|----------|
+| `misc/` | core、draw、widgets | `lv_area`、`lv_color`、`lv_anim`、`lv_timer`、`lv_ll`、matrix |
+| `stdlib/` | 全库 | `lv_malloc` / `lv_free` / `lv_snprintf` |
+| `tick/` | misc(timer)、core(refr) | `lv_tick_get()` 毫秒时间 |
+| `osal/` | draw（多线程 unit）、libs | mutex、thread sleep（Linux 上 `lv_linux`） |
+
+#### 4. 旁路关系
+
+| 目录 | 挂载点 | 作用 |
+|------|--------|------|
+| `debugging/sysmon` | `core/lv_refr`、display 刷新周期 | 输出 `sysmon: XX FPS`（stress 测试数据来源） |
+| `debugging/monkey` | indev | 随机注入输入做压测 |
+| `debugging/test` | 内部 | 单元测试桩，正常 lvglsim 不启用 |
+
+---
+
+### 一帧内的时序（结合本仓库 Wayland）
+
+```mermaid
+sequenceDiagram
+    participant T as tick/ + misc/timer
+    participant C as core/
+    participant W as widgets/
+    participant D as draw/
+    participant L as libs/ + font/
+    participant Disp as display/
+    participant Drv as drivers/
+    participant WSL as WSLg
+
+    T->>C: lv_timer_handler()
+    C->>C: lv_indev_read (indev/)
+    Note over C: 命中测试 → LV_EVENT_CLICKED
+    W->>C: lv_obj_invalidate()
+    C->>C: refr_timer 合并脏区
+    C->>W: 发送 DRAW_MAIN 事件
+    W->>D: lv_draw_label / fill / … (add_task)
+    D->>L: 解码图片 / NanoVG / glyph
+    D->>Disp: 写入 layer draw_buf
+    C->>Disp: disp_flush 区域
+    Disp->>Drv: flush_cb (SHM 或 EGL)
+    Drv->>WSL: wl_surface_commit / eglSwapBuffers
+    Drv->>Disp: flush_ready
+    Note over debugging: sysmon 记录 FPS
+```
+
+| 后端 | draw 路径 | drivers 路径 |
+|------|-----------|--------------|
+| **wayland-shm** | `draw/sw/` CPU 像素 | `drivers/wayland` SHM flush |
+| **wayland-egl** | `draw/nanovg/` + `libs/nanovg` | `drivers/wayland` + `drivers/opengles` |
+
+---
+
+### 16 目录两两关系矩阵（简化）
+
+行 = 依赖方，列 = 被依赖方（● = 直接依赖，○ = 间接/可选）
+
+|  | core | display | indev | draw | drivers | widgets | layouts | font | libs | themes | misc | stdlib | osal | tick | debugging | others |
+|--|:---:|:-------:|:-----:|:----:|:-------:|:-------:|:-------:|:----:|:----:|:------:|:----:|:------:|:----:|:----:|:---------:|:------:|
+| **widgets** | ● | ○ | ○ | ● | ○ | | ● | ○ | ○ | ○ | ● | ● | ○ | ○ | ○ | ○ |
+| **core** | | ● | ● | ● | ○ | ○ | ○ | ○ | ○ | ○ | ● | ● | ○ | ● | ○ | ○ |
+| **draw** | ○ | ● | | | ○ | ○ | ○ | ● | ● | ○ | ● | ● | ○ | ○ | ○ | ○ |
+| **display** | ● | | | ○ | ● | ○ | ○ | ○ | ○ | ○ | ● | ● | ○ | ○ | ● | ○ |
+| **indev** | ● | ● | | ○ | ● | ○ | ○ | ○ | ○ | ○ | ● | ○ | ○ | ○ | ○ | ○ |
+| **drivers** | ○ | ● | ● | ○ | | ○ | ○ | ○ | ● | ○ | ● | ● | ○ | ○ | ○ | ○ |
+| **layouts** | ● | ○ | ○ | ○ | ○ | ● | | ○ | ○ | ○ | ● | ○ | ○ | ○ | ○ | ○ |
+| **themes** | ○ | ○ | ○ | ○ | ○ | ● | ○ | ○ | ○ | | ○ | ○ | ○ | ○ | ○ | ○ |
+| **others** | ● | ○ | ○ | ○ | ○ | ○ | ○ | ○ | ○ | ○ | ● | ● | ○ | ○ | ○ | |
+
+读法示例：`draw` **直接依赖** `font`、`libs`、`misc`、`stdlib`；**通过** `display` **间接依赖** `drivers`。
+
+---
+
+### 归纳：三种关系类型
+
+1. **主数据流（纵向）**  
+   `widgets → core → draw → display → drivers`  
+   负责「画出来并送到屏幕」。
+
+2. **交互回路（纵向 + 横向）**  
+   `drivers → indev → core → widgets → core(invalidate) → draw …`  
+   负责「用户操作改变 UI」。
+
+3. **基础设施（横切）**  
+   `misc / stdlib / osal / tick` 被各层调用；`debugging` 观测主链路；`themes` 影响 widgets 外观但不参与像素管线。
+
+---
+
 ## 与本仓库 `lv_port_linux` 的分工
 
 | 仓库路径 | 职责 |
@@ -174,6 +419,191 @@ indev/ ──事件──► core/ ──invalidate──► draw/ ──像素�
 | **`lv_port_linux/scripts/`** | WSL Wayland 构建、stress 对比脚本等 |
 
 构建 `lvglsim` 时：主仓 CMake 拉子模块，按 `-DCONFIG=wayland` 等生成 `lv_conf.h`，再编译子模块 `lvgl` + 主仓 `src/`。
+
+---
+
+## OpenGLES 模块：分布、调用方与依赖
+
+`draw/opengles/` 与 `drivers/opengles/` 是**两条不同路径**。本仓库 `wayland-egl` 配置（`configs/wayland-egl.defaults`）通常只启用后者 + NanoVG，**不启用** `draw/opengles` draw unit。
+
+### 配置开关
+
+| 宏 | 作用 | 本仓库 wayland-egl |
+|----|------|-------------------|
+| **`LV_USE_OPENGLES`** | 启用 `drivers/opengles/` GL/EGL 基础设施 | ✅ 开 |
+| **`LV_USE_EGL`** | 用 EGL 上下文（Wayland Surface）而非桌面 GL | ✅ 开 |
+| **`LV_USE_DRAW_NANOVG`** | 2D 绘制走 NanoVG draw unit | ✅ 开 |
+| **`LV_USE_DRAW_OPENGLES`** | 2D 绘制走 `draw/opengles` draw unit | ❌ 关（与 NanoVG **互斥**） |
+
+### 代码分布总览
+
+```mermaid
+flowchart TB
+    subgraph DRAW["draw/ — 绘制层"]
+        DO["draw/opengles/<br/>lv_draw_opengles.c<br/>【LV_USE_DRAW_OPENGLES】"]
+        DN3["draw/nanovg/lv_draw_nanovg_3d.c<br/>【3D 纹理 quad】"]
+        DN["draw/nanovg/ + libs/nanovg<br/>【2D NanoVG，直接用 GL API】"]
+    end
+
+    subgraph DRV["drivers/opengles/ — GL/EGL 驱动层"]
+        EGL["lv_opengles_egl.c"]
+        DRIVER["lv_opengles_driver.c"]
+        TEX["lv_opengles_texture.c"]
+        GLFW["lv_opengles_glfw.c"]
+        SHADER["opengl_shader/"]
+        GLAD["glad/ (gl.c, gles2.c, egl.c)"]
+    end
+
+    subgraph PLAT["drivers/ — 平台后端（调用 opengles）"]
+        WL["wayland/lv_wayland_backend_egl.c"]
+        SDL["sdl/lv_sdl_egl.c"]
+        DRM["display/drm/lv_linux_drm_egl.c"]
+    end
+
+    subgraph LIBS["libs/ — GLTF 等"]
+        GLTF["libs/gltf/gltf_view/*.cpp<br/>gltf_environment/"]
+    end
+
+    subgraph CORE["core/"]
+        REFR["lv_refr.c"]
+    end
+
+    INIT["lv_init.c"]
+
+    DO --> DRIVER
+    DN3 --> DRIVER
+    WL --> EGL
+    WL --> TEX
+    WL --> DRIVER
+    SDL --> EGL
+    SDL --> TEX
+    DRM --> EGL
+    GLFW --> DRIVER
+    EGL --> DRIVER
+    EGL --> GLAD
+    DRIVER --> SHADER
+    DRIVER --> GLAD
+    TEX --> GLAD
+    GLTF --> SHADER
+    GLTF --> DRIVER
+    INIT --> DO
+    REFR --> DO
+    DN -.->|"同 GL 上下文，不直接调 lv_opengles_render"| GLAD
+```
+
+### `drivers/opengles/` 内部模块
+
+| 文件/目录 | 职责 |
+|-----------|------|
+| **`lv_opengles_egl.c`** | EGL Display/Surface/Context 创建、`eglSwapBuffers` |
+| **`lv_opengles_driver.c`** | 底层 GLES：纹理 quad 绘制、viewport、shader 绑定、`lv_opengles_render()` |
+| **`lv_opengles_texture.c`** | Display 用 GL 纹理 + CPU `fb1` 缓冲（NanoVG 读回后上传） |
+| **`lv_opengles_glfw.c`** | 桌面 GLFW 窗口模拟器（多 texture 合成到窗口） |
+| **`opengl_shader/`** | GLSL 编译、链接、缓存（`lv_opengl_shader_manager.c`） |
+| **`assets/lv_opengles_shader.c`** | 内建 vertex/fragment shader 源码 |
+| **`glad/`** | 动态加载 **libGLESv2 / libEGL**（或桌面 GL） |
+| **`lv_opengles_debug.c`** | `GL_CALL()` 调试包装 |
+
+### `draw/opengles/` 做什么
+
+| 文件 | 职责 |
+|------|------|
+| **`lv_draw_opengles.c`** | 注册 **OPENGLES draw unit**：把 FILL/LABEL/IMAGE/LAYER/3D 等 draw task 画到 **GPU 纹理**，再合成到 framebuffer |
+
+与 **`draw/nanovg`** 二选一，不能同时启用（源码里有 `#error`）。
+
+### 谁调用 OpenGLES（调用方 → 被调模块）
+
+#### 调用 `drivers/opengles` 的模块
+
+| 调用方 | 调用的 API / 模块 | 场景 |
+|--------|-------------------|------|
+| **`drivers/wayland/lv_wayland_backend_egl.c`** | `lv_opengles_egl_context_create/destroy`<br>`lv_opengles_texture_*`<br>`lv_opengles_render_display`<br>`lv_opengles_egl_update` | **WSLg wayland-egl 主路径**：flush 时把纹理送到屏幕 |
+| **`drivers/sdl/lv_sdl_egl.c`** | 同上 | SDL + EGL 后端 |
+| **`drivers/display/drm/lv_linux_drm_egl.c`** | 同上 | DRM/KMS + EGL |
+| **`drivers/opengles/lv_opengles_glfw.c`** | `lv_opengles_init`<br>`lv_opengles_render_texture_rbswap` | 桌面 GLFW 模拟器 |
+| **`drivers/opengles/lv_opengles_egl.c`** | `lv_opengles_init()` | 创建 EGL 上下文时初始化 GL 状态 |
+| **`drivers/opengles/lv_opengles_texture.c`** | `lv_opengles_init()` | 创建 display 纹理时 |
+| **`draw/nanovg/lv_draw_nanovg_3d.c`** | `lv_opengles_reinit_state`<br>`lv_opengles_viewport`<br>`lv_opengles_render` | **3dtexture** 平面纹理（暂停 NanoVG 帧后走 GLES blit） |
+| **`draw/opengles/lv_draw_opengles.c`** | `lv_opengles_render_*`<br>`lv_opengles_render_fill` | `LV_USE_DRAW_OPENGLES=1` 时全部 2D 任务 |
+| **`libs/gltf/gltf_view/*.cpp`** | `lv_opengles_private.h`<br>`opengl_shader` | GLTF 3D 模型渲染 |
+| **`libs/gltf/gltf_environment/lv_gltf_ibl_sampler.c`** | 同上 | IBL 环境贴图采样 |
+
+#### 调用 `draw/opengles` 的模块
+
+| 调用方 | API | 条件 |
+|--------|-----|------|
+| **`lv_init.c`** | `lv_draw_opengles_init/deinit` | `LV_USE_DRAW_OPENGLES` |
+| **`core/lv_refr.c`** | `lv_draw_opengles_clear_layer_area` | 透明背景时需清 GPU 纹理脏像素 |
+
+#### NanoVG 与 OpenGLES 的关系（易混淆）
+
+| 模块 | 关系 |
+|------|------|
+| **`draw/nanovg/`** | 2D 主路径：通过 **`libs/nanovg`** 直接调 **GLES2 API**（`nvgCreateGLES2` 等），与 `lv_opengles_driver` **并行共享** EGL 创建的 GL 上下文 |
+| **`draw/nanovg/lv_draw_nanovg.c`** | 仅在 `LV_USE_OPENGLES && LV_USE_EGL` 时 include `lv_opengles_private.h`（用 glad 的 GL 符号，而非 static link GLEW） |
+
+### OpenGLES 向下依赖什么
+
+```mermaid
+flowchart BT
+    APP["上层调用者<br/>wayland_egl / nanovg_3d / draw_opengles / gltf"]
+
+    APP --> DRIVER["lv_opengles_driver.c"]
+    APP --> EGL["lv_opengles_egl.c"]
+    APP --> TEX["lv_opengles_texture.c"]
+
+    DRIVER --> SHADER["opengl_shader/"]
+    DRIVER --> GLAD["glad/"]
+    EGL --> GLAD
+    TEX --> GLAD
+
+    SHADER --> GLAD
+    GLAD --> SYS_GLES["系统库 libGLESv2.so"]
+    GLAD --> SYS_EGL["系统库 libEGL.so"]
+
+    EGL --> WL_CB["Wayland 回调<br/>wl_egl_window_create<br/>（lv_egl_interface）"]
+    WL_CB --> WSLG["WSLg compositor"]
+
+    DRIVER --> STDLIB["stdlib/ lv_malloc"]
+    DRIVER --> MISC["misc/ area, color, matrix"]
+
+    NANOVG["libs/nanovg + draw/nanovg"] --> GLAD
+    NANOVG --> FBO["nanovg FBO cache<br/>（NVGLUframebuffer）"]
+```
+
+| 层级 | 依赖 |
+|------|------|
+| **系统** | `libGLESv2`、`libEGL`；WSL 上常需 `/usr/lib/wsl/lib`（Mesa D3D12） |
+| **glad** | 运行时解析 GL/EGL 函数指针 |
+| **Wayland** | `wl_egl_window`、`eglSwapBuffers` → WSLg |
+| **LVGL 内部** | `stdlib`（内存）、`misc`（矩阵/区域）、`display`（layer 纹理 id 存在 `layer->user_data`） |
+| **NanoVG** | 不经过 `lv_opengles_render()`，但共用 **同一 EGL Context** |
+
+### 本仓库 wayland-egl 实际调用链
+
+```
+lv_timer_handler
+  → core/refr
+  → draw/nanovg（2D：NanoVG → GL FBO → glReadPixels → CPU draw_buf）
+  → draw/nanovg_3d（若有 3dtexture：end NanoVG → lv_opengles_render）
+  → display flush_cb
+  → drivers/wayland/egl_flush_cb
+       → glTexImage2D（CPU 像素 → display 纹理）  或  LV_USE_DRAW_OPENGLES 时 lv_opengles_render_display_texture
+       → lv_opengles_egl_update（eglSwapBuffers）
+       → wl_surface_commit → WSLg
+```
+
+**wayland-shm** 路径完全不经过 `drivers/opengles`，CPU 像素直送 `wl_shm`。
+
+### 一句话对照
+
+| 目录 | 角色 | 本仓库是否启用 |
+|------|------|----------------|
+| **`drivers/opengles/`** | GL/EGL **基础设施 + 纹理 blit/flush** | ✅（wayland-egl） |
+| **`draw/opengles/`** | 用 GLES 做 **完整 2D draw unit**（替代 NanoVG） | ❌ |
+| **`draw/nanovg/`** | 2D 用 NanoVG 画，**共享** GL 上下文 | ✅ |
+| **`libs/gltf/`** | 3D 模型，直接用 GL + shader | 仅 `LV_USE_GLTF=1` 时 |
 
 ---
 
@@ -193,5 +623,7 @@ indev/ ──事件──► core/ ──invalidate──► draw/ ──像素�
 | 某功能怎么实现 | `src/` 同名模块 |
 | stress / widgets demo | `demos/` |
 | Wayland SHM / EGL 后端 | `src/drivers/wayland/` |
-| NanoVG 绘制 | `src/draw/nanovg/` |
+| OpenGLES 驱动（EGL/纹理/flush） | `src/drivers/opengles/` |
+| OpenGLES draw unit（替代 NanoVG） | `src/draw/opengles/` |
+| NanoVG 绘制 | `src/draw/nanovg/` + `src/libs/nanovg/` |
 | 构建选项从哪来 | 主仓 `configs/*.defaults` → 生成 `lv_conf.h` |
