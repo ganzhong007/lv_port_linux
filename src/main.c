@@ -25,7 +25,7 @@
 
 #include "lvgl/lvgl.h"
 #include "src/simple_button.h"
-#if LV_USE_DEMO_STRESS || LV_USE_DEMO_BENCHMARK || LV_USE_DEMO_RENDER || LV_USE_DEMO_VECTOR_GRAPHIC
+#if LV_USE_DEMO_STRESS || LV_USE_DEMO_BENCHMARK || LV_USE_DEMO_RENDER || LV_USE_DEMO_VECTOR_GRAPHIC || LV_USE_DEMO_GLTF
 #include "lvgl/demos/lv_demos.h"
 #endif
 
@@ -195,6 +195,10 @@ int main(int argc, char ** argv)
     lv_demo_render(LV_DEMO_RENDER_SCENE_FILL, LV_OPA_COVER);
 #elif defined(LVGL_APP_DEMO_VECTOR_GRAPHIC) && LV_USE_DEMO_VECTOR_GRAPHIC
     lv_demo_vector_graphic_not_buffered();
+#elif defined(LVGL_APP_DEMO_GLTF) && LV_USE_DEMO_GLTF
+    const char * gltf_path = getenv_default("LVGL_GLTF_MODEL",
+                                            "A:lvgl/examples/libs/gltf/lvgl_logo.glb");
+    lv_demo_gltf(gltf_path);
 #else
     simple_button_create();
 #endif

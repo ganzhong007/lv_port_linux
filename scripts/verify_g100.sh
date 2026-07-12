@@ -221,7 +221,14 @@ case "${CP}" in
     cmake_build gltf
     [[ "${BUILD_ONLY}" == true ]] && exit 0
     RUN_SEC="${RUN_SEC:-60}" run_demo gltf
-    log "Milestone: tag g100-mvp-3d-blit; gates D3-01~05"
+    grep_gate 'G100 3D BLIT ready' 'G6 3D BLIT init'
+    grep_gate 'DrawUnitG100 ready' 'G100 unit active under gltf'
+    if grep -qE 'GL error|Failed to load glTF|Failed to read the entire gltf|assert\\(0\\)' "/tmp/verify_g100_${CP}.log" 2>/dev/null; then
+      log "WARN gate: GL/gltf load error in log"
+    else
+      log "PASS gate: no GL/gltf load error"
+    fi
+    log "Manual: D3-01 visual (3D+2D panel); tag g100-mvp-3d-blit after PASS"
     ;;
   CP-07a)
     cmake_build benchmark

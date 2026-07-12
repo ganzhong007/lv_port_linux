@@ -354,7 +354,7 @@ target_link_libraries(lvgl PUBLIC ${PKG_CONFIG_LIB} m pthread rt dl)
 add_executable(lvglsim src/main.c src/simple_button.c src/simple_button_shot.c)
 
 option(LVGL_SIMPLE_BUTTON_TRACE "Enable layer trace logs for the simple button walkthrough" ON)
-set(LVGL_APP_DEMO "simple_button" CACHE STRING "App entry: simple_button, stress, benchmark, render, vector_graphic")
+set(LVGL_APP_DEMO "simple_button" CACHE STRING "App entry: simple_button, stress, benchmark, render, vector_graphic, gltf")
 set(LV_DEMO_STRESS_DRAW_MULT "1" CACHE STRING "Stress demo drawable count multiplier (1=stock)")
 
 if(LVGL_APP_DEMO STREQUAL "stress")
@@ -370,6 +370,8 @@ elseif(LVGL_APP_DEMO STREQUAL "render")
     target_compile_definitions(lvglsim PRIVATE LVGL_APP_DEMO_RENDER=1)
 elseif(LVGL_APP_DEMO STREQUAL "vector_graphic")
     target_compile_definitions(lvglsim PRIVATE LVGL_APP_DEMO_VECTOR_GRAPHIC=1)
+elseif(LVGL_APP_DEMO STREQUAL "gltf")
+    target_compile_definitions(lvglsim PRIVATE LVGL_APP_DEMO_GLTF=1)
 endif()
 
 if(LVGL_SIMPLE_BUTTON_TRACE)
