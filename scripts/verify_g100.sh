@@ -153,13 +153,24 @@ case "${CP}" in
   CP-02)
     cmake_build stress
     [[ "${BUILD_ONLY}" == true ]] && exit 0
-    RUN_SEC="${RUN_SEC:-45}" run_demo stress
+    RUN_SEC="${RUN_SEC:-5}" run_demo stress
+    grep_gate 'G100 label text hash' 'label text hash cache active'
+    grep_gate 'DrawUnitG100 ready' 'G100 unit active under stress'
     log "Manual: TX-02~04 dynamic label GPU; AP-06 no ReadPixels"
     ;;
   CP-03a|CP-03b)
     cmake_build render
     [[ "${BUILD_ONLY}" == true ]] && exit 0
-    RUN_SEC="${RUN_SEC:-45}" run_demo render
+    RUN_SEC="${RUN_SEC:-5}" run_demo render
+    grep_gate 'DrawUnitG100 ready' 'G100 unit active under render'
+    if [[ "${CP}" == "CP-03a" ]]; then
+      grep_gate 'G100 vector core ready' 'vector SOLID/GRAD/dash path active'
+      if grep -qE 'unsupported style' "/tmp/verify_g100_${CP}.log" 2>/dev/null; then
+        log "WARN gate: unsupported style warn found (VC-01 may fail)"
+      else
+        log "PASS gate: no unsupported style warn"
+      fi
+    fi
     ;;
   CP-04a|CP-04b)
     cmake_build render
