@@ -31,7 +31,7 @@
 | CP-00 | G0 Bootstrap | 2026-07-12 | dee769a | 5420c9e | — | `verify_g100.sh CP-00` | G0-01～08, PF-01 | PASS | stress ~175 FPS, 800×480 |
 | CP-01a | G1 shader | 2026-07-12 | f92e2ef | e1519e0 | — | `verify_g100.sh CP-01a` | 编译 + AP shader | PASS | `G100 native shader ready (program=18)`; simple_button ~900 FPS |
 | CP-01b | G1 grad | 2026-07-12 | d12fa25 | 5d98660 | — | `verify_g100.sh CP-01b` | GR-12, AP-01～03 | PASS | native grad program=21; render ~920 FPS; no VECTOR grad warn |
-| CP-01c | G1 fill/image | 2026-07-12 | (待 commit) | (待 commit) | — | `verify_g100.sh CP-01c` | D2-01, GR-03～06 | PASS | native solid program=18, tex program=24; stress OK |
+| CP-01c | G1 fill/image | 2026-07-12 | 0376ccb | 0376ccb | — | `verify_g100.sh CP-01c` | D2-01, GR-03～06 | PASS | native solid program=18, tex program=24; stress OK |
 | CP-02 | G2 label | | | | | `verify_g100.sh CP-02` | TX-02～04, AP-06 | | |
 | CP-03a | G3 vector | | | | | `verify_g100.sh CP-03a` | VC-01～03 | | |
 | CP-03b | G3 PATTERN | | | | | `verify_g100.sh CP-03b` | VC-04 | | |
