@@ -327,7 +327,9 @@ case "${CP}" in
     cmake_build 3dview
     [[ "${BUILD_ONLY}" == true ]] && exit 0
     RUN_SEC="${RUN_SEC:-45}" run_demo 3dview
+    grep_gate 'G100 3D theme ready' 'G8.6 LV_STYLE_3D props'
     grep_gate 'DrawUnitG100 ready' 'G100 unit active under 3dview'
+    log "Gate D3-15 (3D theme/style)"
     log "Milestone: tag g100-mvp-3d-full"
     ;;
   *)
