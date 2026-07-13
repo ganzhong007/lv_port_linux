@@ -1,8 +1,8 @@
-# G100 3D Draw Task 体系设计（已认可方向）
+# EVGPU 3D Draw Task 体系设计（已认可方向）
 
 > **状态：** 设计规格（未实现），**方向已认可**  
-> **总体计划索引：** [drawunit_g100_design.md §8](./drawunit_g100_design.md#8-实施阶段g100-专项与总体计划)  
-> **关联：** [drawunit_g100_design.md](./drawunit_g100_design.md) G6/G8、[opengles2_gpu_integration_guide.md §4](./opengles2_gpu_integration_guide.md#4-3d-路径draw-task-体系与-widget)、[drawunit_g100_test_cases.md](./drawunit_g100_test_cases.md) D3 系列  
+> **总体计划索引：** [drawunit_evgpu_design.md §8](./drawunit_evgpu_design.md#8-实施阶段evgpu-专项与总体计划)  
+> **关联：** [drawunit_evgpu_design.md](./drawunit_evgpu_design.md) G6/G8、[opengles2_gpu_integration_guide.md §4](./opengles2_gpu_integration_guide.md#4-3d-路径draw-task-体系与-widget)、[drawunit_evgpu_test_cases.md](./drawunit_evgpu_test_cases.md) D3 系列  
 > **原则：** 3D 光栅化纳入 Draw Task 管线，与 2D task **同队列、同帧、同 DrawUnit** 调度；不再把 3D 降级为「仅 blit 一张纹理」。
 
 ---
@@ -12,7 +12,7 @@
 | 现状（旧 `LV_DRAW_TASK_TYPE_3D`） | 新设计 |
 |----------------------------------|--------|
 | 仅 `tex_id` + area + opa，语义 = 2D 纹理合成 | **8 类 3D task**，覆盖 VP / mesh / scene / blit |
-| `glDraw*` 在 Widget `LV_EVENT_DRAW_MAIN` 内偷跑 | **DrawUnitG100 dispatch** 统一执行 |
+| `glDraw*` 在 Widget `LV_EVENT_DRAW_MAIN` 内偷跑 | **DrawUnitEVGPU dispatch** 统一执行 |
 | 3D 与 2D 组合 = 先 FBO 再 blit | **task 队列直接交错**（2D → 3D VP → 2D → …） |
 | 一种 task 对应所有 3D | **每类 3D 对象**映射到明确 task |
 
@@ -73,7 +73,7 @@
     → 分配 lv_3d_pass_t（FBO、depth、camera、子 task 列表）
     → widget / scene 向 pass 子 layer 添加 CLR / MESH / …
     → 子 task 全部 FINISHED
-    → G100 resolve（FBO color → 父 layer composite）
+    → EVGPU resolve（FBO color → 父 layer composite）
     → VP task FINISHED
 ```
 
@@ -247,7 +247,7 @@ typedef struct {
 } lv_draw_3d_sync_dsc_t;
 ```
 
-插入点：3D pass 与 2D task 边界，或 `g100_end_frame` 前后。
+插入点：3D pass 与 2D task 边界，或 `evgpu_end_frame` 前后。
 
 ---
 
@@ -305,33 +305,33 @@ lv_obj
 
 ---
 
-## 9. DrawUnitG100 dispatch
+## 9. DrawUnitEVGPU dispatch
 
 | Task | Handler | 关键 GL 操作 |
 |------|---------|--------------|
-| `3D_VIEWPORT` | `lv_draw_g100_3d_viewport` | create/bind FBO, depth RB, set viewport, push pass |
-| `3D_CLEAR` | `lv_draw_g100_3d_clear` | `glClear` |
-| `3D_MESH` | `lv_draw_g100_3d_mesh` | program, uniform MVP, `glDrawElements` |
-| `3D_LINE` | `lv_draw_g100_3d_line` | line shader |
-| `3D_SCENE` | `lv_draw_g100_3d_scene` | 遍历 scene → batch mesh |
-| `3D_CALLBACK` | `lv_draw_g100_3d_cb` | 调 cb，检查 GL 状态 |
-| `3D_BLIT` | `lv_draw_g100_3d_blit` | 现有 `lv_opengles_render_texture` |
-| `3D_SYNC` | `lv_draw_g100_3d_sync` | `lv_opengles_reinit_state()` |
+| `3D_VIEWPORT` | `lv_draw_evgpu_3d_viewport` | create/bind FBO, depth RB, set viewport, push pass |
+| `3D_CLEAR` | `lv_draw_evgpu_3d_clear` | `glClear` |
+| `3D_MESH` | `lv_draw_evgpu_3d_mesh` | program, uniform MVP, `glDrawElements` |
+| `3D_LINE` | `lv_draw_evgpu_3d_line` | line shader |
+| `3D_SCENE` | `lv_draw_evgpu_3d_scene` | 遍历 scene → batch mesh |
+| `3D_CALLBACK` | `lv_draw_evgpu_3d_cb` | 调 cb，检查 GL 状态 |
+| `3D_BLIT` | `lv_draw_evgpu_3d_blit` | 现有 `lv_opengles_render_texture` |
+| `3D_SYNC` | `lv_draw_evgpu_3d_sync` | `lv_opengles_reinit_state()` |
 
 **文件（规划）：**
 
 ```text
-draw/g100/
-├── lv_draw_g100_3d_blit.c      # 自现有 lv_draw_g100_3d.c  rename
-├── lv_draw_g100_3d_viewport.c
-├── lv_draw_g100_3d_clear.c
-├── lv_draw_g100_3d_mesh.c
-├── lv_draw_g100_3d_line.c
-├── lv_draw_g100_3d_scene.c
-├── lv_draw_g100_3d_cb.c
-├── lv_draw_g100_3d_sync.c
-├── lv_g100_mesh_cache.c
-└── lv_g100_3d_pass.c           # pass 栈 / FBO 池
+draw/evgpu/
+├── lv_draw_evgpu_3d_blit.c      # 自现有 lv_draw_evgpu_3d.c  rename
+├── lv_draw_evgpu_3d_viewport.c
+├── lv_draw_evgpu_3d_clear.c
+├── lv_draw_evgpu_3d_mesh.c
+├── lv_draw_evgpu_3d_line.c
+├── lv_draw_evgpu_3d_scene.c
+├── lv_draw_evgpu_3d_cb.c
+├── lv_draw_evgpu_3d_sync.c
+├── lv_evgpu_mesh_cache.c
+└── lv_evgpu_3d_pass.c           # pass 栈 / FBO 池
 ```
 
 **evaluate：** 3D 族在 `!gl_ready` 时返回 0；**无 SW fallback**（与现 3D 一致）。
@@ -364,7 +364,7 @@ draw/g100/
 | **G8.3** | **`3D_SCENE`** | `lv_3dscene`；**gltf → SCENE task** | D3-12, D3-01 回归 |
 | **G8.4～G8.6** | material/light/pick/theme | 同前规划 | D3-13～15 |
 
-**依赖：** G8.2+ 需要 G1 `lv_g100_shader` 原生 GLES2（非 NVG 后端）。
+**依赖：** G8.2+ 需要 G1 `lv_evgpu_shader` 原生 GLES2（非 EVGR bootstrap 后端）。
 
 ---
 
@@ -383,7 +383,7 @@ draw/g100/
 
 | 项 | 说明 |
 |----|------|
-| GL 状态 | 每个 VP 结束 `3D_SYNC`；G100 2D 仍用 NVG/GLES 交替 |
+| GL 状态 | 每个 VP 结束 `3D_SYNC`；EVGPU 2D 仍用 NVG/GLES 交替 |
 | 性能 | 多 VP = 多 FBO resolve；G7 FBO 池复用 |
 | 线程 | 同 LVGL 单线程；task 队列非线程安全 |
 | GLES2 | 无 compute；灯光数受 uniform 限制 |
@@ -396,6 +396,6 @@ draw/g100/
 | 问题 | 答案 |
 |------|------|
 | 3D 还是一张纹理吗？ | **否**（默认路径）；仅 **外部 tex** 走 `3D_BLIT` |
-| 3D 谁执行 draw call？ | **DrawUnitG100**，不是 Widget 偷跑 |
+| 3D 谁执行 draw call？ | **DrawUnitEVGPU**，不是 Widget 偷跑 |
 | 2D/3D 如何同帧组合？ | **同一 layer task 队列**，VP 与 FILL/LABEL 交错 |
 | 与 G8 关系？ | G8.0～G8.3 = 3D task 族 + widget **逐步实现** |

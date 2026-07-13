@@ -100,7 +100,7 @@ ThorVG 等 C++ 源码在 `src/libs/thorvg/`，单独编成 `liblvgl_thorvg` 再�
 | 1 | **`core/`** | L1 核心 | 对象树、事件、样式、刷新调度 | `lv_obj*.c` 对象模型；`lv_refr.c` 脏区合并与刷新定时器；`lv_group.c` 焦点组 | 所有 widget 与 demo 的基础；点击 → invalidate → refr 均经此层 |
 | 2 | **`display/`** | L1 显示抽象 | 屏幕/图层生命周期、分辨率、flush 回调 | `lv_display.c`：`lv_display_create()`、buffer 模式、layer 链表 | 连接 `drivers/wayland` 与上层 draw；`lvglsim -W -H` 改的就是 display 分辨率 |
 | 3 | **`indev/`** | L1 输入 | 指针、键盘、encoder、手势 | `lv_indev.c` 轮询与命中测试；`lv_gridnav.c` 网格导航 | Wayland 后端创建的 pointer/keyboard 最终进 `lv_indev_read` |
-| 4 | **`draw/`** | L2–L3 绘制 | Draw task 管线、各 draw unit、图像解码 | `lv_draw.c` 任务调度；`sw/` CPU 绘制；`nanovg/`、`g100/`、`opengles/`；`lv_draw_3d.c` | **wayland-egl** 走 `draw/nanovg`；**wayland-g100** 走 `draw/g100`；**wayland-shm** 走 `draw/sw` |
+| 4 | **`draw/`** | L2–L3 绘制 | Draw task 管线、各 draw unit、图像解码 | `lv_draw.c` 任务调度；`sw/` CPU 绘制；`nanovg/`、`evgpu/`、`opengles/`；`lv_draw_3d.c` | **wayland-egl** 走 `draw/nanovg`；**wayland-evgpu** 走 `draw/evgpu`；**wayland-shm** 走 `draw/sw` |
 | 5 | **`drivers/`** | L5–L6 平台 | 对接 OS/硬件：显示、输入、GPU | `wayland/` SHM/EGL 窗口；`opengles/` EGL 上下文与纹理；`evdev/` 输入 | 本仓库 WSLg 核心：`drivers/wayland` + `drivers/opengles` |
 | 6 | **`widgets/`** | L4 控件 | 内置 UI 组件实现 | `button/`、`label/`、`3dtexture/` 等；每控件 `*_class` + 事件 | `simple_button` 用的 button/label 即在此；**全量清单见本文 §「LVGL 内置 Widget 全览」** |
 | 7 | **`layouts/`** | L4 布局 | Flex / Grid 等布局算法 | `flex/`、`grid/`、`lv_layout.c` | 容器内子对象排列；stress demo 里 list/flex 场景会用到 |
@@ -110,7 +110,7 @@ ThorVG 等 C++ 源码在 `src/libs/thorvg/`，单独编成 `liblvgl_thorvg` 再�
 | 11 | **`stdlib/`** | 横切内存 | 内存、字符串、sprintf 抽象 | `lv_mem.c`；`clib/` / `builtin/` 等后端 | `LV_USE_STDLIB_*` 配置决定 malloc 实现 |
 | 12 | **`osal/`** | 横切 OS | 线程、互斥、延迟（多 RTOS/OS） | `lv_linux.c`、`lv_freertos.c`、`lv_pthread` 等 | Linux/WSL 构建通常走 `lv_linux` / pthread |
 | 13 | **`tick/`** | 横切时间 | 毫秒 tick，`lv_tick_get()` | `lv_tick.c` | `lv_timer_handler()` 与动画时间基准 |
-| 14 | **`libs/`** | L3 内嵌库 | 第三方与编解码器源码 | `nanovg/`、`thorvg/`、`gltf/`、`g100/`（可选 G7）等 | G0：`libs/nanovg`；G1+ 目标移除 nanovg；可选 `libs/g100` 承接 GLES2 运行时 |
+| 14 | **`libs/`** | L3 内嵌库 | 第三方与编解码器源码 | `nanovg/`、`thorvg/`、`gltf/`、`evgpu/`（可选 G7）等 | G0：`libs/nanovg`；G1+ 目标移除 nanovg；可选 `libs/evgpu` 承接 GLES2 运行时 |
 | 15 | **`debugging/`** | 调试/测试 | 运行时诊断与测试辅助 | `sysmon/` FPS/CPU 监控（stress 日志里的 `sysmon:`）；`monkey/` 随机测试 | stress 对比脚本解析的 FPS 即 **sysmon** 输出 |
 | 16 | **`others/`** | 扩展功能 | 非核心但可选的「其他」模块 | `file_explorer/`、`fragment/`、`translation/` | 一般 demo 默认不依赖；按 `lv_conf` 开关 |
 
@@ -137,10 +137,10 @@ indev/ ──事件──► core/ ──invalidate──► draw/ ──像素�
 | 目录 | 重要子目录 / 文件 |
 |------|-------------------|
 | `core/` | `lv_obj*.c`、`lv_refr.c`、`lv_event.c`、`lv_group.c` |
-| `draw/` | `sw/`（CPU）、`nanovg/`、`g100/`、`opengles/`、`lv_draw_rect/label/image*.c`、`lv_image_decoder.c` |
+| `draw/` | `sw/`（CPU）、`nanovg/`、`evgpu/`、`opengles/`、`lv_draw_rect/label/image*.c`、`lv_image_decoder.c` |
 | `drivers/` | `wayland/`、`opengles/`、`evdev/`、`sdl/`、`drm/`、`x11/` |
 | `widgets/` | 每控件一目录：`button/`、`label/`、`3dtexture/`、`chart/` … |
-| `libs/` | `nanovg/`（G0）、`g100/`（可选 G7）、`thorvg/`、`gltf/`、`freetype/`、`lodepng/`、`libwebp/` |
+| `libs/` | `nanovg/`（G0）、`evgpu/`（可选 G7）、`thorvg/`、`gltf/`、`freetype/`、`lodepng/`、`libwebp/` |
 | `debugging/` | `sysmon/`（性能监控）、`test/`（内部测试桩） |
 | `font/` | 内嵌 Montserrat 等 `.c` 字库 + `fmt_txt/` |
 | `layouts/` | `flex/`、`grid/` |
@@ -371,7 +371,7 @@ sequenceDiagram
 |------|-----------|--------------|
 | **wayland-shm** | `draw/sw/` CPU 像素 | `drivers/wayland` SHM flush |
 | **wayland-egl** | `draw/nanovg/` + `libs/nanovg` | `drivers/wayland` + `drivers/opengles` |
-| **wayland-g100** | `draw/g100/` + `libs/nanovg`（G0） | 同上；`configs/wayland-g100.defaults` |
+| **wayland-evgpu** | `draw/evgpu/` + `libs/nanovg`（G0） | 同上；`configs/wayland-evgpu.defaults` |
 
 ---
 
@@ -864,7 +864,7 @@ LVGL v9 的 **Draw Unit** 是 `lv_draw.c` 调度体系中的**可插拔渲染后
 |---|--------|----------|--------|------------|
 | 1 | **SW** | `draw/sw/` | `LV_USE_DRAW_SW`（默认 1） | `lv_init()` → `lv_draw_sw_init()` |
 | 2 | **NANOVG** | `draw/nanovg/` + `libs/nanovg/` | `LV_USE_DRAW_NANOVG` + `LV_USE_NANOVG` | `lv_opengles_init()` 内（需 `LV_USE_OPENGLES`） |
-| 2b | **G100** | `draw/g100/` + `libs/nanovg/`（G0 Bootstrap） | `LV_USE_DRAW_G100` + `LV_USE_NANOVG`（库） | `lv_opengles_init()` → `lv_draw_g100_init()`；与 NANOVG unit **互斥** |
+| 2b | **EVGPU** | `draw/evgpu/` + `libs/nanovg/`（G0 Bootstrap） | `LV_USE_DRAW_EVGPU` + `LV_USE_NANOVG`（库） | `lv_opengles_init()` → `lv_draw_evgpu_init()`；与 NANOVG unit **互斥** |
 | 3 | **OPENGLES** | `draw/opengles/` | `LV_USE_DRAW_OPENGLES` + `LV_USE_OPENGLES` | `lv_init()` → `lv_draw_opengles_init()` |
 | 4 | **VG_LITE** | `draw/vg_lite/` | `LV_USE_DRAW_VG_LITE` | `lv_init()` → `lv_draw_vg_lite_init()` |
 | 5 | **NEMA_GFX** | `draw/nema_gfx/` + `libs/nema_gfx/` | `LV_USE_NEMA_GFX` | `lv_init()` → `lv_draw_nema_gfx_init()` |
@@ -876,7 +876,7 @@ LVGL v9 的 **Draw Unit** 是 `lv_draw.c` 调度体系中的**可插拔渲染后
 | 11 | **ESP_PPA** | `draw/espressif/ppa/` | `LV_USE_PPA` | `lv_init()` → `lv_draw_ppa_init()` |
 | 12 | **EVE** | `draw/eve/` | `LV_USE_DRAW_EVE` | `lv_init()` → `lv_draw_eve_init()` |
 
-> **注意**：NanoVG / G100 unit 不在 `lv_init.c` 里直接 init，而是在 **`drivers/opengles/lv_opengles_driver.c`** 的 `lv_opengles_init()` 中调用 `lv_draw_nanovg_init()` 或 **`lv_draw_g100_init()`**，以保证 GL 上下文已就绪。详见 [drawunit_g100_design.md §2.7～2.9](./drawunit_g100_design.md#27-目录结构lvgl-子模块)。
+> **注意**：NanoVG / EVGPU unit 不在 `lv_init.c` 里直接 init，而是在 **`drivers/opengles/lv_opengles_driver.c`** 的 `lv_opengles_init()` 中调用 `lv_draw_nanovg_init()` 或 **`lv_draw_evgpu_init()`**，以保证 GL 上下文已就绪。详见 [drawunit_evgpu_design.md §2.7～2.9](./drawunit_evgpu_design.md#27-目录结构lvgl-子模块)。
 
 ### 总对比表
 
@@ -884,7 +884,7 @@ LVGL v9 的 **Draw Unit** 是 `lv_draw.c` 调度体系中的**可插拔渲染后
 |-----------|-------------|----------|-----------------|--------------|
 | **SW** | CPU（可选 NEON/Helium/RVV 加速 blend） | layer `draw_buf` 内存像素 | 100（兜底） | **wayland-shm 主路径**；egl 下作 fallback |
 | **NANOVG** | GPU OpenGL/GLES（矢量 raster） | **主屏**：EGL 默认 FB；**子 layer**：FBO 纹理；ReadPixels 仅 canvas/snapshot | 80 | **wayland-egl 主路径** |
-| **G100** | GPU GLES2（G0：NanoVG 库后端；G1+：原生 shader） | 同 NANOVG 主屏模型；根 layer `user_data==NULL` | 80（unit_id=11） | **wayland-g100**；`draw/g100/` 22 文件 |
+| **EVGPU** | GPU GLES2（G0：NanoVG 库后端；G1+：原生 shader） | 同 NANOVG 主屏模型；根 layer `user_data==NULL` | 80（unit_id=11） | **wayland-evgpu**；`draw/evgpu/` 22 文件 |
 | **OPENGLES** | GPU GLES 纹理缓存 | GL texture（少读回 CPU） | 0 | glfw-3d 配置；与 NanoVG **互斥** |
 | **VG_LITE** | Vivante VG-Lite IP | VG-Lite 目标缓冲 | 80 | 未启用（嵌入式 SoC） |
 | **NEMA_GFX** | Think Silicon Nema GPU | Nema 命令流 | 80 | 未启用（STM32U5 等） |

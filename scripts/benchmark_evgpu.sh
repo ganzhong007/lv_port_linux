@@ -1,28 +1,28 @@
 #!/usr/bin/env bash
-# G100 perf baseline: stress (PF-01) + lv_demo_benchmark (PF-02) on wayland-g100.
+# EVGPU perf baseline: stress (PF-01) + lv_demo_benchmark (PF-02) on wayland-evgpu.
 #
 # Usage:
-#   ./scripts/benchmark_g100.sh [stress_sec] [benchmark_sec]
-#   ./scripts/benchmark_g100.sh 60 120
+#   ./scripts/benchmark_evgpu.sh [stress_sec] [benchmark_sec]
+#   ./scripts/benchmark_evgpu.sh 60 120
 #
-# Logs: benchmark_logs/g100_stress.log , benchmark_logs/g100_benchmark.log
+# Logs: benchmark_logs/evgpu_stress.log , benchmark_logs/evgpu_benchmark.log
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 STRESS_SEC="${1:-60}"
 BENCH_SEC="${2:-120}"
-CONFIG="${CONFIG:-wayland-g100}"
+CONFIG="${CONFIG:-wayland-evgpu}"
 W="${W:-800}"
 H="${H:-480}"
 DRAW_MULT="${DRAW_MULT:-1}"
-BUILD="${LVGL_BUILD_DIR:-$ROOT/build-g100-stress}"
+BUILD="${LVGL_BUILD_DIR:-$ROOT/build-evgpu-stress}"
 LOG_DIR="$ROOT/benchmark_logs"
 mkdir -p "$LOG_DIR"
 
 RUN_ARGS=(-b wayland -W "$W" -H "$H")
 CMAKE_COMMON=(-DCONFIG="$CONFIG" -DLVGL_SIMPLE_BUTTON_TRACE=OFF)
 
-log() { echo "[benchmark_g100] $*"; }
+log() { echo "[benchmark_evgpu] $*"; }
 
 cmake_build() {
   local demo="$1"
@@ -72,17 +72,17 @@ PY
 
 log "==> PF-01 stress ${STRESS_SEC}s @ ${W}x${H} (DRAW_MULT=${DRAW_MULT})"
 cmake_build stress
-STRESS_LOG="$LOG_DIR/g100_stress.log"
+STRESS_LOG="$LOG_DIR/evgpu_stress.log"
 rm -f "$STRESS_LOG"
 timeout "$STRESS_SEC" "$BUILD/bin/lvglsim" "${RUN_ARGS[@]}" >"$STRESS_LOG" 2>&1 || true
 parse_stress_fps "$STRESS_LOG"
 
 log "==> PF-02 benchmark ${BENCH_SEC}s"
 cmake_build benchmark
-BENCH_LOG="$LOG_DIR/g100_benchmark.log"
+BENCH_LOG="$LOG_DIR/evgpu_benchmark.log"
 rm -f "$BENCH_LOG"
 timeout "$BENCH_SEC" "$BUILD/bin/lvglsim" "${RUN_ARGS[@]}" >"$BENCH_LOG" 2>&1 || true
 parse_benchmark_csv "$BENCH_LOG" || log "WARN: benchmark may need more time (default 120s+)"
 
 log "Done. Logs: $STRESS_LOG , $BENCH_LOG"
-log "Optional PF-03 soak: RUN_SEC=1800 ./scripts/verify_g100.sh CP-07a (stress 30min)"
+log "Optional PF-03 soak: RUN_SEC=1800 ./scripts/verify_evgpu.sh CP-07a (stress 30min)"

@@ -1,41 +1,41 @@
 # OpenGL ES 2.0 GPU 与 LVGL 集成指南
 
 > 基于当前 `wsl_wayland_3d` 分支上的 LVGL 子模块与 `lv_port_linux` 主仓结构整理。  
-> 目标：在 **G100（GLES 2.0 硬件 GPU）** 上让 LVGL 跑通 GPU 路径，并向上完整展示 GPU 能力。  
-> **新增 DrawUnitG100** 驱动 G100 硬件；改造计划见 [gles2_gpu_porting_plan.md](./gles2_gpu_porting_plan.md)，设计规格见 [drawunit_g100_design.md](./drawunit_g100_design.md)。
+> 目标：在 **EVGPU（GLES 2.0 硬件 GPU）** 上让 LVGL 跑通 GPU 路径，并向上完整展示 GPU 能力。  
+> **新增 DrawUnitEVGPU** 驱动 EVGPU 硬件；改造计划见 [gles2_gpu_porting_plan.md](./gles2_gpu_porting_plan.md)，设计规格见 [drawunit_evgpu_design.md](./drawunit_evgpu_design.md)。
 
 ---
 
 ## 结论（先说）
 
 1. **只增加一个 DrawUnit 远远不够**。DrawUnit 只解决「如何把 draw task 变成 GPU 像素/纹理」；上下还有 EGL 驱动、平台 flush、display 缓冲模型、refr 适配等层。
-2. **G100 硬件 + DrawUnitG100（新增）**：**G100** 指 **GLES 2.0 硬件 GPU**；**DrawUnitG100** 是 LVGL 新增 `draw/g100/` 模块，通过 `drivers/opengles` 向 G100 下发 GLES2 命令。
+2. **EVGPU 硬件 + DrawUnitEVGPU（新增）**：**EVGPU** 指 **GLES 2.0 硬件 GPU**；**DrawUnitEVGPU** 是 LVGL 新增 `draw/evgpu/` 模块，通过 `drivers/opengles` 向 EVGPU 下发 GLES2 命令。
 3. **要「展示 GPU 全部能力」**，除基础设施外，还需补齐 **渐变 / 矢量 / 文字 / BLUR（GPU 必达）**、3D、零拷贝送显、综合 demo 等；做不到的部分由 `draw/sw` 兜底。
 
 ---
 
-## 1. G100 硬件与 DrawUnitG100 整体架构
+## 1. EVGPU 硬件与 DrawUnitEVGPU 整体架构
 
 ### 1.1 术语
 
 | 名称 | 是什么 | 不是什么 |
 |------|--------|----------|
-| **G100** | **GLES 2.0 硬件 GPU**（SoC 图形加速器 + 厂商驱动提供的 EGL/GLES2 API） | 不是 DrawUnit 本身 |
-| **DrawUnitG100** | LVGL **新增**软件模块：`lvgl/src/draw/g100/`，`evaluate` / `dispatch` 把 draw task 变为 GL 绘制 | 不是 GPU 驱动，不是 EGL |
-| **drivers/opengles** | LVGL GLES **基础设施**（context、shader、纹理、flush 辅助） | 不是 DrawUnit；被 DrawUnitG100 **调用** |
-| **draw/sw** | CPU 软绘 Draw Unit，G100 做不了时的 **兜底** | 不替代 G100 主路径 |
+| **EVGPU** | **GLES 2.0 硬件 GPU**（SoC 图形加速器 + 厂商驱动提供的 EGL/GLES2 API） | 不是 DrawUnit 本身 |
+| **DrawUnitEVGPU** | LVGL **新增**软件模块：`lvgl/src/draw/evgpu/`，`evaluate` / `dispatch` 把 draw task 变为 GL 绘制 | 不是 GPU 驱动，不是 EGL |
+| **drivers/opengles** | LVGL GLES **基础设施**（context、shader、纹理、flush 辅助） | 不是 DrawUnit；被 DrawUnitEVGPU **调用** |
+| **draw/sw** | CPU 软绘 Draw Unit，EVGPU 做不了时的 **兜底** | 不替代 EVGPU 主路径 |
 
 关系一句话：
 
-**应用 → LVGL → DrawUnitG100（新增）→ drivers/opengles → libGLESv2 → G100 硬件 GPU → 屏幕**
+**应用 → LVGL → DrawUnitEVGPU（新增）→ drivers/opengles → libGLESv2 → EVGPU 硬件 GPU → 屏幕**
 
-### 1.2 总览（应用 → G100 硬件 → 屏幕）
+### 1.2 总览（应用 → EVGPU 硬件 → 屏幕）
 
 ```mermaid
 flowchart TB
     subgraph MAIN["lv_port_linux 主仓"]
         APP["main.c / demo"]
-        CONF["configs/*-g100.defaults"]
+        CONF["configs/*-evgpu.defaults"]
         BUILD["CMake / scripts"]
     end
 
@@ -44,7 +44,7 @@ flowchart TB
         WDG["widgets / layouts"]
         CORE["core · display · refr · indev"]
         subgraph DRAW_LAYER["draw/ 绘制层"]
-            DU["★ DrawUnitG100（新增）<br/>lv_draw_g100.c"]
+            DU["★ DrawUnitEVGPU（新增）<br/>lv_draw_evgpu.c"]
             SWU["draw/sw（兜底）"]
         end
         subgraph INFRA["GPU 基础设施"]
@@ -63,7 +63,7 @@ flowchart TB
     end
 
     subgraph HW["硬件"]
-        G100["★ G100<br/>GLES2.0 GPU"]
+        EVGPU["★ EVGPU<br/>GLES2.0 GPU"]
         PANEL["LCD / HDMI / DSI"]
     end
 
@@ -76,18 +76,18 @@ flowchart TB
     GLTF -->|渲染 tex_id| DU
     CORE -->|flush| BE
     BE --> OGLDRV
-    OGLDRV --> EGL --> GLES --> KMD --> G100
+    OGLDRV --> EGL --> GLES --> KMD --> EVGPU
     BE --> PANEL
-    G100 --> PANEL
+    EVGPU --> PANEL
 ```
 
-### 1.3 DrawUnitG100 与 G100 硬件关系
+### 1.3 DrawUnitEVGPU 与 EVGPU 硬件关系
 
 ```mermaid
 flowchart LR
     subgraph SOFTWARE["LVGL 软件（子模块）"]
         TASK["draw task<br/>FILL·IMAGE·LABEL·BLUR…"]
-        DU["DrawUnitG100<br/>（新增）"]
+        DU["DrawUnitEVGPU<br/>（新增）"]
         INFRA["drivers/opengles"]
         SW["draw/sw"]
     end
@@ -98,7 +98,7 @@ flowchart LR
     end
 
     subgraph HARDWARE["硬件"]
-        G100["G100 GPU<br/>Shader · Texture · ROP"]
+        EVGPU["EVGPU GPU<br/>Shader · Texture · ROP"]
         FB["Framebuffer"]
         OUT["显示输出"]
     end
@@ -106,29 +106,29 @@ flowchart LR
     TASK --> DU
     TASK -->|evaluate 拒绝| SW
     DU -->|evaluate 接受 score=80| INFRA
-    INFRA --> EGL --> GLES --> G100
-    G100 --> FB --> OUT
+    INFRA --> EGL --> GLES --> EVGPU
+    EVGPU --> FB --> OUT
     SW -->|CPU 像素| TASK
 ```
 
-### 1.4 DrawUnitG100 内部分层 → G100 执行
+### 1.4 DrawUnitEVGPU 内部分层 → EVGPU 执行
 
 ```mermaid
 flowchart TB
-    subgraph DU["DrawUnitG100（新增 draw/g100/）"]
+    subgraph DU["DrawUnitEVGPU（新增 draw/evgpu/）"]
         EVAL["evaluate_cb"]
         DISP["dispatch_cb"]
         subgraph MOD["执行模块"]
-            GRAD["g100_grad 渐变"]
-            TXT["g100_label 文字"]
-            VEC["g100_vector 矢量"]
-            BLUR["g100_blur"]
-            IMG["g100_image"]
-            FILL["g100_fill / border / shadow"]
-            LYR["g100_layer FBO"]
-            D3["g100_3d composite"]
+            GRAD["evgpu_grad 渐变"]
+            TXT["evgpu_label 文字"]
+            VEC["evgpu_vector 矢量"]
+            BLUR["evgpu_blur"]
+            IMG["evgpu_image"]
+            FILL["evgpu_fill / border / shadow"]
+            LYR["evgpu_layer FBO"]
+            D3["evgpu_3d composite"]
         end
-        POOL["g100_fbo_pool · texture_cache"]
+        POOL["evgpu_fbo_pool · texture_cache"]
     end
 
     subgraph INFRA["drivers/opengles（已有，非 DrawUnit）"]
@@ -137,7 +137,7 @@ flowchart TB
         EGLH["egl 辅助"]
     end
 
-    subgraph GPU["G100 GLES2.0 硬件"]
+    subgraph GPU["EVGPU GLES2.0 硬件"]
         VS["Vertex Shader"]
         FS["Fragment Shader"]
         TM["Texture Unit"]
@@ -153,7 +153,7 @@ flowchart TB
     FS --> ROP
 ```
 
-### 1.5 一帧数据流（DrawUnitG100 → G100 硬件）
+### 1.5 一帧数据流（DrawUnitEVGPU → EVGPU 硬件）
 
 ```mermaid
 sequenceDiagram
@@ -162,11 +162,11 @@ sequenceDiagram
     participant Refr as lv_refr
     participant W as widgets
     participant Q as draw task 队列
-    participant DU as DrawUnitG100<br/>（新增）
+    participant DU as DrawUnitEVGPU<br/>（新增）
     participant SW as draw/sw
     participant Drv as drivers/opengles
     participant BE as 平台 backend
-    participant GPU as G100 GPU<br/>（GLES2 硬件）
+    participant GPU as EVGPU GPU<br/>（GLES2 硬件）
 
     App->>Refr: lv_timer_handler()
     Refr->>W: 遍历对象 DRAW_MAIN
@@ -174,17 +174,17 @@ sequenceDiagram
 
     loop 每个 task
         Q->>DU: evaluate_cb
-        alt DrawUnitG100 可画
+        alt DrawUnitEVGPU 可画
             DU->>DU: preference_score=80
         else 不可画
             Q->>SW: CPU 兜底
         end
     end
 
-    DU->>DU: dispatch → g100_* 模块
+    DU->>DU: dispatch → evgpu_* 模块
     DU->>Drv: glUseProgram · BindTexture · FBO
     Drv->>GPU: GLES2 draw calls
-    Note over GPU: G100 执行 shader<br/>写 framebuffer / texture
+    Note over GPU: EVGPU 执行 shader<br/>写 framebuffer / texture
 
     SW->>Q: 少量 CPU 像素 blend
 
@@ -199,24 +199,24 @@ sequenceDiagram
 ```mermaid
 flowchart LR
     subgraph MAIN["主仓 lv_port_linux"]
-        M1["configs/*-g100.defaults"]
+        M1["configs/*-evgpu.defaults"]
         M2["CMake 链 EGL/GLES"]
         M3["demo / scripts / docs"]
     end
 
     subgraph SUB["lvgl 子模块"]
-        S1["★ draw/g100/ DrawUnitG100"]
+        S1["★ draw/evgpu/ DrawUnitEVGPU"]
         S2["drivers/opengles"]
         S3["平台 backend flush"]
-        S4["lv_init 注册 g100"]
+        S4["lv_init 注册 evgpu"]
     end
 
     subgraph HW["板级"]
-        H1["★ G100 GPU + 驱动"]
+        H1["★ EVGPU GPU + 驱动"]
         H2["EGL 窗口 / DRM"]
     end
 
-    M1 -->|LV_USE_DRAW_G100| S1
+    M1 -->|LV_USE_DRAW_EVGPU| S1
     M2 --> S2
     S1 --> S2 --> H1
     S3 --> H2 --> H1
@@ -232,23 +232,23 @@ flowchart LR
         SW0["draw/sw"]
     end
 
-    subgraph AFTER["目标：G100 硬件 + DrawUnitG100"]
-        DU["draw/g100<br/>DrawUnitG100（新增）"]
+    subgraph AFTER["目标：EVGPU 硬件 + DrawUnitEVGPU"]
+        DU["draw/evgpu<br/>DrawUnitEVGPU（新增）"]
         SW1["draw/sw 兜底"]
-        HW["G100 GPU 硬件"]
+        HW["EVGPU GPU 硬件"]
     end
 
     BEFORE -.->|吸收能力·专项优化| DU
     DU --> HW
 ```
 
-上线 DrawUnitG100 后：**关闭** `LV_USE_DRAW_NANOVG`（Draw Unit）与 `LV_USE_DRAW_OPENGLES`，保留 `LV_USE_DRAW_SW=1`。G0 Bootstrap 仍保留 **`LV_USE_NANOVG=1`**（NanoVG **库**，非 Draw Unit），绘制代码在 `draw/g100/` 独立维护。
+上线 DrawUnitEVGPU 后：**关闭** `LV_USE_DRAW_NANOVG`（Draw Unit）与 `LV_USE_DRAW_OPENGLES`，保留 `LV_USE_DRAW_SW=1`。G0 Bootstrap 仍保留 **`LV_USE_NANOVG=1`**（NanoVG **库**，非 Draw Unit），绘制代码在 `draw/evgpu/` 独立维护。
 
 ### 1.8 LVGL 通用分层表
 
 | 层级 | 目录/模块 | 职责 |
 |------|-----------|------|
-| **DrawUnitG100（新增）** | `draw/g100/` | 面向 G100 硬件，接管 GPU 可画 task |
+| **DrawUnitEVGPU（新增）** | `draw/evgpu/` | 面向 EVGPU 硬件，接管 GPU 可画 task |
 | **draw/sw** | `draw/sw/` | MASK_BITMAP、Canvas、稀有格式等兜底 |
 | **GPU 基础设施** | `drivers/opengles/` | EGL 上下文、shader、纹理、`lv_opengles_render()` |
 | **平台后端** | `drivers/wayland`、`drivers/display/drm` 等 | surface、`flush_cb`、`eglSwapBuffers` |
@@ -270,7 +270,7 @@ flowchart LR
 | `opengl_shader/` | GLSL 编译、链接、缓存 |
 | `lv_opengles_driver.c` | 纹理 quad、`lv_opengles_render()`、`lv_opengles_render_display()` |
 | `lv_opengles_texture.c` | display 纹理、`fb1` 占位缓冲 |
-| `lv_opengles_init()` | 初始化 shader/VBO；`LV_USE_DRAW_NANOVG` 时 `lv_draw_nanovg_init()`；**`LV_USE_DRAW_G100` 时 `lv_draw_g100_init()`** |
+| `lv_opengles_init()` | 初始化 shader/VBO；`LV_USE_DRAW_NANOVG` 时 `lv_draw_nanovg_init()`；**`LV_USE_DRAW_EVGPU` 时 `lv_draw_evgpu_init()`** |
 
 无 EGL 上下文与 GL 函数指针，DrawUnit 内 `glDraw*` 无法执行。
 
@@ -297,21 +297,21 @@ flowchart LR
 |---------------|------------|
 | **纹理型**（`draw/opengles`） | `lv_opengles_render_display_texture()` → `eglSwapBuffers` |
 | **NanoVG 主屏** | 直接 `eglSwapBuffers`（画在 EGL 默认 framebuffer） |
-| **DrawUnitG100 主屏** | 与 NanoVG 相同：直接 `eglSwapBuffers`；**不**经 `glTexImage2D(fb1)` |
+| **DrawUnitEVGPU 主屏** | 与 NanoVG 相同：直接 `eglSwapBuffers`；**不**经 `glTexImage2D(fb1)` |
 | **SW + EGL 传统** | `glTexImage2D(fb1)` → `lv_opengles_render_display()` → swap |
 
-新 DrawUnit 必须明确属于哪一类，并改对应 `flush_cb`。G100 在 `lv_wayland_backend_egl.c` 中与 NanoVG 共用 `#if LV_USE_DRAW_OPENGLES || LV_USE_DRAW_NANOVG || LV_USE_DRAW_G100` 分支。
+新 DrawUnit 必须明确属于哪一类，并改对应 `flush_cb`。EVGPU 在 `lv_wayland_backend_egl.c` 中与 NanoVG 共用 `#if LV_USE_DRAW_OPENGLES || LV_USE_DRAW_NANOVG || LV_USE_DRAW_EVGPU` 分支。
 
 ### 2.3 `display/` 层 — 缓冲与渲染模式
 
 | 配置项 | 说明 |
 |--------|------|
-| `lv_display_set_render_mode()` | NanoVG / **G100** 常用 `FULL`；OpenGLES draw unit 常用 `DIRECT` |
-| `layer->user_data` | **纹理型**（`draw/opengles`）在此挂 GL texture id；**NanoVG / G100** 根 layer 必须为 `NULL`（子 layer 为 FBO cache entry） |
+| `lv_display_set_render_mode()` | NanoVG / **EVGPU** 常用 `FULL`；OpenGLES draw unit 常用 `DIRECT` |
+| `layer->user_data` | **纹理型**（`draw/opengles`）在此挂 GL texture id；**NanoVG / EVGPU** 根 layer 必须为 `NULL`（子 layer 为 FBO cache entry） |
 | `draw_buf` | 纹理型输出时多为 **dummy 占位**，真实像素在 GPU |
 | `LV_COLOR_DEPTH` | 与 EGL config、纹理格式（RGB565/RGBA）一致 |
 
-**G0 踩坑（已修）：** `wayland-g100` 关闭 `LV_USE_DRAW_NANOVG` 时，若 `lv_opengles_texture.c` 仍把 `texture_id` 写入 `display->layer_head->user_data`，DrawUnitG100 的 `on_layer_changed()` 会误当作 FBO cache entry，首帧 `lv_draw_rect()` **SIGSEGV**。修复：`#if !LV_USE_DRAW_NANOVG && !LV_USE_DRAW_G100` 才写入。
+**G0 踩坑（已修）：** `wayland-evgpu` 关闭 `LV_USE_DRAW_NANOVG` 时，若 `lv_opengles_texture.c` 仍把 `texture_id` 写入 `display->layer_head->user_data`，DrawUnitEVGPU 的 `on_layer_changed()` 会误当作 FBO cache entry，首帧 `lv_draw_rect()` **SIGSEGV**。修复：`#if !LV_USE_DRAW_NANOVG && !LV_USE_DRAW_EVGPU` 才写入。
 
 ### 2.4 `core/lv_refr.c` — 刷新管线适配
 
@@ -391,14 +391,14 @@ GPU unit **不接全部 task 类型**（VECTOR、BLUR、部分 MASK 等）。架
 
 ## 4. 3D 路径：Draw Task 体系与 Widget
 
-> **★ 已认可新方向：** 3D 不再仅 = 一张纹理 blit。完整规格见 **[g100_3d_draw_tasks_design.md](./g100_3d_draw_tasks_design.md)**（8 类 3D DrawTask、VP 子队列、字段级 dsc、G8 贯通）。
+> **★ 已认可新方向：** 3D 不再仅 = 一张纹理 blit。完整规格见 **[evgpu_3d_draw_tasks_design.md](./evgpu_3d_draw_tasks_design.md)**（8 类 3D DrawTask、VP 子队列、字段级 dsc、G8 贯通）。
 
 ### 4.0 架构摘要（新设计）
 
 | 旧 | 新 |
 |----|-----|
 | 仅 `LV_DRAW_TASK_TYPE_3D` = blit `tex_id` | **8 类 3D task**：VP / CLR / MESH / LINE / SCENE / CB / **BLIT** / SYNC |
-| Widget 内 `glDraw*` | **DrawUnitG100 dispatch** |
+| Widget 内 `glDraw*` | **DrawUnitEVGPU dispatch** |
 | 3D 必须先变纹理 | **3D_VIEWPORT** resolve 直接 composite；仅外部 tex 走 **3D_BLIT** |
 
 ```text
@@ -415,7 +415,7 @@ GPU unit **不接全部 task 类型**（VECTOR、BLUR、部分 MASK 等）。架
 ```text
 （纹理来源：外部 或 lv_gltf_view_render — gltf 在 G8.3 迁移为 3D_SCENE task）
 widgets/3dtexture    → 3D_BLIT task
-lv_draw_3d_blit()  → DrawUnitG100 composite
+lv_draw_3d_blit()  → DrawUnitEVGPU composite
 ```
 
 配置：
@@ -428,7 +428,7 @@ LV_USE_GLTF           1    # G8.3 起改发 3D_SCENE task
 LV_USE_DEMO_GLTF      1
 ```
 
-**Widget 关系（新设计）：** `lv_3dtexture`（BLIT）| **`lv_3dviewport`**（VP pass）| `lv_3dscene` / `lv_3dmesh` | `lv_gltf`（→ SCENE）。详见 [g100_3d_draw_tasks_design.md §8](./g100_3d_draw_tasks_design.md#8-widget--task-映射修订)。
+**Widget 关系（新设计）：** `lv_3dtexture`（BLIT）| **`lv_3dviewport`**（VP pass）| `lv_3dscene` / `lv_3dmesh` | `lv_gltf`（→ SCENE）。详见 [evgpu_3d_draw_tasks_design.md §8](./evgpu_3d_draw_tasks_design.md#8-widget--task-映射修订)。
 
 ---
 
@@ -575,7 +575,7 @@ flowchart TB
 
 ### 4.3 `lv_3dviewport` / `lv_3dview`（规划 → G8 Draw Task 路径）
 
-> **演进说明：** 原 §4.3 `lv_3dview`（FBO + render_cb）已纳入 **[g100_3d_draw_tasks_design.md](./g100_3d_draw_tasks_design.md)**。Widget 名建议 **`lv_3dviewport`**；实现为提交 **`3D_VIEWPORT`** task，而非 widget 内偷跑 GL。
+> **演进说明：** 原 §4.3 `lv_3dview`（FBO + render_cb）已纳入 **[evgpu_3d_draw_tasks_design.md](./evgpu_3d_draw_tasks_design.md)**。Widget 名建议 **`lv_3dviewport`**；实现为提交 **`3D_VIEWPORT`** task，而非 widget 内偷跑 GL。
 
 #### 4.3.1 定位（与 BLIT 路径对比）
 
@@ -597,7 +597,7 @@ flowchart TB
   glTF 全引擎  ───► │ lv_gltf        （引擎层，已有）       │
                     └─────────────────────────────────────┘
                               ↓ 均产出 tex_id
-                    lv_draw_3d() → DrawUnitG100/NanoVG composite
+                    lv_draw_3d() → DrawUnitEVGPU/NanoVG composite
 ```
 
 #### 4.3.2 设计目标
@@ -608,7 +608,7 @@ flowchart TB
 | **与 LVGL 刷新对齐** | 脏区/动画时渲染；可选 `LV_3DVIEW_UPDATE_MODE_CONTINUOUS` |
 | **复用 3D task** | 不新增 draw task 类型；内嵌 `lv_3dtexture_t`，与 gltf 同合成路径 |
 | **应用可扩展** | `render_cb` 注入自定义绘制；内置可选 grid/axes/cube 便于 demo |
-| **G100 友好** | composite 走 `lv_draw_g100_3d` / `lv_opengles_render_texture`；刷新后 `lv_opengles_reinit_state()` |
+| **EVGPU 友好** | composite 走 `lv_draw_evgpu_3d` / `lv_opengles_render_texture`；刷新后 `lv_opengles_reinit_state()` |
 
 #### 4.3.3 配置与依赖
 
@@ -660,7 +660,7 @@ lvgl/src/widgets/3dview/
 lvgl/include/lvgl/widgets/lv_3dview.h
 ```
 
-渲染资源**放在 widget 目录**，不单独建 `libs/g100`（与 [drawunit_g100_design §2.7.1 路径 A](./drawunit_g100_design.md#271-规划目标g1-终态) 一致）；Shader 可薄封装 `drivers/opengles/opengl_shader/`。
+渲染资源**放在 widget 目录**，不单独建 `libs/evgpu`（与 [drawunit_evgpu_design §2.7.1 路径 A](./drawunit_evgpu_design.md#271-规划目标g1-终态) 一致）；Shader 可薄封装 `drivers/opengles/opengl_shader/`。
 
 #### 4.3.6 公共 API（规划）
 
@@ -695,7 +695,7 @@ sequenceDiagram
     participant CB as render_cb
     participant T as 内嵌 3dtexture
     participant D as lv_draw_3d
-    participant G as DrawUnitG100
+    participant G as DrawUnitEVGPU
 
     R->>V: LV_EVENT_DRAW_MAIN
     alt update_mode 需要渲染
@@ -713,16 +713,16 @@ sequenceDiagram
 
 与 `lv_gltf` 差异：`lv_gltf_view_render()` 在库内完成 PBR；`lv_3dview` 把 **3D 绘制权** 交给 `render_cb`，widget 只负责 **视口基础设施**。
 
-#### 4.3.8 与 DrawUnitG100 集成
+#### 4.3.8 与 DrawUnitEVGPU 集成
 
-| 环节 | G100 行为 |
+| 环节 | EVGPU 行为 |
 |------|-----------|
-| 3D composite | `lv_draw_g100_3d` → `lv_opengles_render_texture`（与现 Bootstrap 一致） |
+| 3D composite | `lv_draw_evgpu_3d` → `lv_opengles_render_texture`（与现 Bootstrap 一致） |
 | GL 状态 | `render_cb` 结束后恢复 blend/viewport；composite 前 `lv_opengles_reinit_state()` |
 | 透明 UI | FBO 带 alpha；`clear_color` alpha=0；合成时 respect `opa` |
 | 性能 | `ON_DEMAND` 默认；动画 widget 用 `CONTINUOUS` + `lv_anim` 驱动 invalidate |
 
-详见 [drawunit_g100_design.md §G6 / 3D](./drawunit_g100_design.md#8-实施阶段g100-专项)。
+详见 [drawunit_evgpu_design.md §G6 / 3D](./drawunit_evgpu_design.md#8-实施阶段evgpu-专项)。
 
 #### 4.3.9 典型用法（规划）
 
@@ -761,7 +761,7 @@ lv_3dview_show_grid(vp, true);   /* 可选内置 */
 | **V0** | `lv_3dview` 骨架 + renwin FBO + 继承 3dtexture | 空白视口可显示（clear color） |
 | **V1** | 轨道相机 + `render_cb` + grid/axes | 与 2D UI 同屏 |
 | **V2** | 拾取射线 + `ON_DEMAND`/`CONTINUOUS` | 点击 3D 对象 |
-| **V3** | G100/NanoVG 路径 apitrace；`lv_demo_3dview` | D3 用例；无 GL 状态污染 |
+| **V3** | EVGPU/NanoVG 路径 apitrace；`lv_demo_3dview` | D3 用例；无 GL 状态污染 |
 
 ---
 
@@ -911,16 +911,16 @@ LV_USE_LOTTIE           1   # 可选
 
 ---
 
-## 8. 总览关系图（DrawUnitG100 + G100）
+## 8. 总览关系图（DrawUnitEVGPU + EVGPU）
 
 ```mermaid
 flowchart TB
-    subgraph HW["★ G100 硬件 GPU"]
-        G100["GLES2 执行"]
+    subgraph HW["★ EVGPU 硬件 GPU"]
+        EVGPU["GLES2 执行"]
     end
 
     subgraph CORE["基础设施（必做）"]
-        DU["★ DrawUnitG100（新增）"]
+        DU["★ DrawUnitEVGPU（新增）"]
         DRV[drivers/opengles]
         BE[平台 backend + flush]
         REFR[display / refr 适配]
@@ -943,10 +943,10 @@ flowchart TB
     subgraph UP["向上展示"]
         DEMO[stress / benchmark / gltf]
         BENCH[apitrace + sysmon]
-        PORT[configs/*-g100 + scripts]
+        PORT[configs/*-evgpu + scripts]
     end
 
-    DU --> DRV --> G100
+    DU --> DRV --> EVGPU
     DU --> GRAD & TXT & VEC & BLUR
     SW -.->|少量 task| REFR
     CORE --> CAP --> CAP2 --> UP
@@ -958,8 +958,8 @@ flowchart TB
 
 | 配置文件 | Draw Unit | 3D/GLTF | 说明 |
 |----------|-----------|---------|------|
-| `configs/wayland-g100.defaults` | SW + **DrawUnitG100** | ✅ 开（库） | WSLg G0 Bootstrap |
-| `configs/<soc>-g100.defaults`（板级） | SW + **DrawUnitG100** | 可选 | **G100 硬件目标配置** |
+| `configs/wayland-evgpu.defaults` | SW + **DrawUnitEVGPU** | ✅ 开（库） | WSLg G0 Bootstrap |
+| `configs/<soc>-evgpu.defaults`（板级） | SW + **DrawUnitEVGPU** | 可选 | **EVGPU 硬件目标配置** |
 | `configs/wayland-egl.defaults` | SW + **NANOVG** | ✅ 开 | WSLg 现状参考 |
 | `configs/glfw-3d.defaults` | SW + **OPENGLES** | ✅ 开 | 桌面 GLFW 纹理路径 |
 | `configs/drm-egl-3d.defaults` | SW + **NANOVG** | ✅ 开 | DRM + 3D |
@@ -971,9 +971,9 @@ flowchart TB
 
 | 模块 | 路径 |
 |------|------|
-| **DrawUnitG100（G0 已实现）** | `draw/g100/`（22 文件，见 [design §2.7](./drawunit_g100_design.md#27-目录结构lvgl-子模块)） |
-| **G100 GLES2 库（可选 G7）** | `libs/g100/`（规划，[§2.7.1 路径 B](./drawunit_g100_design.md#271-规划目标g1-终态)） |
-| NanoVG Draw Unit（对照） | `draw/nanovg/`（与 g100 编译互斥） |
+| **DrawUnitEVGPU（G0 已实现）** | `draw/evgpu/`（22 文件，见 [design §2.7](./drawunit_evgpu_design.md#27-目录结构lvgl-子模块)） |
+| **EVGPU GLES2 库（可选 G7）** | `libs/evgpu/`（规划，[§2.7.1 路径 B](./drawunit_evgpu_design.md#271-规划目标g1-终态)） |
+| NanoVG Draw Unit（对照） | `draw/nanovg/`（与 evgpu 编译互斥） |
 | NanoVG GLES2 库（G0 后端，G1+ 移除） | `libs/nanovg/`（`LV_USE_NANOVG=1` 时链接） |
 | OpenGLES draw unit（现状参考） | `draw/opengles/` |
 | OpenGLES 驱动 | `drivers/opengles/` |
@@ -981,7 +981,7 @@ flowchart TB
 | Wayland EGL backend | `drivers/wayland/lv_wayland_backend_egl.c` |
 | DRM EGL backend | `drivers/display/drm/lv_linux_drm_egl.c` |
 
-重点：**新增 DrawUnitG100 驱动 G100 硬件**，按能力类别补缺口 + 板级集成 + 展示层。
+重点：**新增 DrawUnitEVGPU 驱动 EVGPU 硬件**，按能力类别补缺口 + 板级集成 + 展示层。
 
 ---
 
@@ -989,11 +989,11 @@ flowchart TB
 
 | 文档 | 内容 |
 |------|------|
-| [drawunit_g100_design.md §8](./drawunit_g100_design.md#8-实施阶段g100-专项与总体计划) | **总体实施计划（G0～G8 贯通）**、MVP、3D Task 索引 |
-| [g100_3d_draw_tasks_design.md](./g100_3d_draw_tasks_design.md) | **3D Draw Task 全族**（8 类 task、dsc 字段、VP 子队列，已认可） |
-| [drawunit_g100_design.md](./drawunit_g100_design.md) | **DrawUnitG100** 设计规格、GPU 必达、SW 兜底、架构 §2 |
-| [g100_test_results.md](./g100_test_results.md) | **Checkpoint 验证结果**勾选表 |
-| [drawunit_g100_design.md §8.8](./drawunit_g100_design.md#88-checkpoint-步步为营验证与提交) | **CP 步步为营**验证与 git push SOP |
+| [drawunit_evgpu_design.md §8](./drawunit_evgpu_design.md#8-实施阶段evgpu-专项与总体计划) | **总体实施计划（G0～G8 贯通）**、MVP、3D Task 索引 |
+| [evgpu_3d_draw_tasks_design.md](./evgpu_3d_draw_tasks_design.md) | **3D Draw Task 全族**（8 类 task、dsc 字段、VP 子队列，已认可） |
+| [drawunit_evgpu_design.md](./drawunit_evgpu_design.md) | **DrawUnitEVGPU** 设计规格、GPU 必达、SW 兜底、架构 §2 |
+| [evgpu_test_results.md](./evgpu_test_results.md) | **Checkpoint 验证结果**勾选表 |
+| [drawunit_evgpu_design.md §8.8](./drawunit_evgpu_design.md#88-checkpoint-步步为营验证与提交) | **CP 步步为营**验证与 git push SOP |
 | [gles2_gpu_porting_plan.md](./gles2_gpu_porting_plan.md) | **改造计划**：P0–P5 步骤、子模块/主仓分工 |
 | [lvgl_submodule_code_layout.md](./lvgl_submodule_code_layout.md) | 子模块目录、16 层架构、OpenGLES 调用链、NanoVG 路径澄清、display 纹理改造草案 |
 | [simple_button_guide.md](./simple_button_guide.md) | Wayland SHM/EGL 对比、NanoVG 函数链（已校正 flush 路径） |
