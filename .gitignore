@@ -59,6 +59,12 @@ dkms.conf
 /Debug/
 .cache
 
+# Cross-build artifacts and sysroot staging
+.sysroot-staging/
+build-a53weston/
+build-a53weston-egl/
+build-orangepi/
+
 # IDE Project files
 /.settings/
 .*project
