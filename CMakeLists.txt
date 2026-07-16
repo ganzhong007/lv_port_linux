@@ -351,10 +351,10 @@ target_include_directories(lvgl_linux PUBLIC
 # Link LVGL with external dependencies - Modern CMake/CMP0079 allows this
 target_link_libraries(lvgl PUBLIC ${PKG_CONFIG_LIB} m pthread rt dl)
 
-add_executable(lvglsim src/main.c src/simple_button.c src/simple_button_shot.c)
+add_executable(lvglsim src/main.c src/simple_button.c src/simple_button_shot.c src/simple_button_style.c src/simple_anim.c)
 
 option(LVGL_SIMPLE_BUTTON_TRACE "Enable layer trace logs for the simple button walkthrough" ON)
-set(LVGL_APP_DEMO "simple_button" CACHE STRING "App entry: simple_button, stress, benchmark, render, vector_graphic, gltf, 3dviewport, 3dscene, 3dview")
+set(LVGL_APP_DEMO "simple_button" CACHE STRING "App entry: simple_button, simple_button_style, simple_anim, stress, benchmark, render, vector_graphic, gltf, 3dviewport, 3dscene, 3dview")
 set(LV_DEMO_STRESS_DRAW_MULT "1" CACHE STRING "Stress demo drawable count multiplier (1=stock)")
 
 if(LVGL_APP_DEMO STREQUAL "stress")
@@ -364,6 +364,10 @@ if(LVGL_APP_DEMO STREQUAL "stress")
             target_compile_definitions(lvgl_demos PRIVATE LV_DEMO_STRESS_DRAW_MULT=${LV_DEMO_STRESS_DRAW_MULT})
         endif()
     endif()
+elseif(LVGL_APP_DEMO STREQUAL "simple_button_style")
+    target_compile_definitions(lvglsim PRIVATE LVGL_APP_DEMO_SIMPLE_BUTTON_STYLE=1)
+elseif(LVGL_APP_DEMO STREQUAL "simple_anim")
+    target_compile_definitions(lvglsim PRIVATE LVGL_APP_DEMO_SIMPLE_ANIM=1)
 elseif(LVGL_APP_DEMO STREQUAL "benchmark")
     target_compile_definitions(lvglsim PRIVATE LVGL_APP_DEMO_BENCHMARK=1)
 elseif(LVGL_APP_DEMO STREQUAL "render")

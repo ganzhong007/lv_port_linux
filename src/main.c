@@ -25,6 +25,8 @@
 
 #include "lvgl/lvgl.h"
 #include "src/simple_button.h"
+#include "src/simple_button_style.h"
+#include "src/simple_anim.h"
 #if LV_USE_DEMO_STRESS || LV_USE_DEMO_BENCHMARK || LV_USE_DEMO_RENDER || LV_USE_DEMO_VECTOR_GRAPHIC || LV_USE_DEMO_GLTF || LV_USE_DEMO_3DVIEWPORT || LV_USE_DEMO_3DSCENE || LV_USE_DEMO_3DVIEW
 #include "lvgl/demos/lv_demos.h"
 #endif
@@ -186,9 +188,13 @@ int main(int argc, char ** argv)
     }
 #endif
 
-    /* Minimal example: one fullscreen button (see src/simple_button.c) */
+    /* Minimal examples / demos — selected by -DLVGL_APP_DEMO=... */
 #if defined(LVGL_APP_DEMO_STRESS) && LV_USE_DEMO_STRESS
     lv_demo_stress();
+#elif defined(LVGL_APP_DEMO_SIMPLE_BUTTON_STYLE)
+    simple_button_style_create();
+#elif defined(LVGL_APP_DEMO_SIMPLE_ANIM)
+    simple_anim_create();
 #elif defined(LVGL_APP_DEMO_BENCHMARK) && LV_USE_DEMO_BENCHMARK
     lv_demo_benchmark();
 #elif defined(LVGL_APP_DEMO_RENDER) && LV_USE_DEMO_RENDER
