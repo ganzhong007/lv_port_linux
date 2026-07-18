@@ -30,3 +30,13 @@
 - **FILL** (+32%) and **MASK_RECT** (+28%) also underperform, suggesting the simple GLES2 quad-drawing in evgpuganesh is less efficient than evgr's batched path.
 - **BLUR** (−9%), **TRIANGLE** (−7%), **BORDER** (−4%) show small wins, indicating some tasks benefit from direct GL.
 - The Ganesh-style direct GL approach does not outperform EVGPU's evgr backend on this low-end GLES2 GPU.
+
+## Memory Usage (RSS)
+
+| Binary | RSS |
+|--------|:---:|
+| `lvglsim_evgpu` (pure EVGPU) | 43,004 KB |
+| `lvglsim_evgpuganesh` | 43,408 KB |
+| **Δ** | **+404 KB (+0.9%)** |
+
+RSS is nearly identical. The tiny 404 KB overhead matches expectations from evgpuganesh's extra GL shader/VBO/FBO code. No meaningful memory impact.

@@ -22,6 +22,10 @@ LV_USE_DRAW_OPENGLES 0
 
 # EVGPUGANESH draw unit (Ganesh-style direct GL for 2D tasks)
 LV_USE_DRAW_EVGPUGANESH 1
+
+# EVGPU_C_R_T draw unit (optimized Cairo/Rive/ThorVG patterns)
+LV_USE_DRAW_EVGPU_C_R_T 0
+
 LV_USE_NANOVG 0
 
 # 3D widgets needed by 3dscene (viewport + mesh). No light/gltf.

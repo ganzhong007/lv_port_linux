@@ -351,7 +351,7 @@ target_include_directories(lvgl_linux PUBLIC
 # Link LVGL with external dependencies - Modern CMake/CMP0079 allows this
 target_link_libraries(lvgl PUBLIC ${PKG_CONFIG_LIB} m pthread rt dl)
 
-if(CONFIG_LV_USE_DRAW_EVGPU OR CONFIG_LV_USE_DRAW_EVGPUGANESH OR CONFIG_LV_USE_OPENGLES)
+if(CONFIG_LV_USE_DRAW_EVGPU OR CONFIG_LV_USE_DRAW_EVGPUGANESH OR CONFIG_LV_USE_DRAW_EVGPU_C_R_T OR CONFIG_LV_USE_OPENGLES)
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(GLESV2 REQUIRED glesv2)
     target_link_libraries(lvgl PUBLIC ${GLESV2_LIBRARIES})
