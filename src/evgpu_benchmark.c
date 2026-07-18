@@ -1,11 +1,12 @@
 #include <stdio.h>
 #include "lvgl/lvgl.h"
 #include "lvgl/lvgl_private.h"
+#include "demo_g3_showcase.h"
 
 #if LV_USE_PERF_MONITOR
 
 #define SCENE_TIME_MS    4000
-#define MAX_SCENES       12
+#define MAX_SCENES       13
 
 typedef struct {
     const char * name;
@@ -411,6 +412,13 @@ static void mask_rect_scene_create(lv_obj_t * parent)
     }
 }
 
+/* 13. G3 SHOWCASE */
+static void g3_showcase_scene_create(lv_obj_t * parent)
+{
+    LV_UNUSED(parent);
+    demo_g3_showcase_init();
+}
+
 /******************** SCENE DATA ********************/
 
 static void init_scenes(void)
@@ -439,6 +447,8 @@ static void init_scenes(void)
     scenes[10].create_cb = layer_scene_create;
     scenes[11].name = "MASK_RECT";
     scenes[11].create_cb = mask_rect_scene_create;
+    scenes[12].name = "G3_SHOWCASE";
+    scenes[12].create_cb = g3_showcase_scene_create;
 }
 
 /******************** PERF OBSERVER ********************/
@@ -540,12 +550,26 @@ static void next_scene_timer_cb(lv_timer_t * timer)
         return;
     }
 
+    lv_obj_t * scr = lv_screen_active();
     if(scene_parent) {
         lv_obj_delete(scene_parent);
         scene_parent = NULL;
+    } else {
+        /* Clean up scenes that built directly on the screen (e.g. G3 showcase) */
+        uint32_t child_cnt = lv_obj_get_child_count(scr);
+        lv_obj_t ** children = malloc(child_cnt * sizeof(lv_obj_t *));
+        if(children) {
+            for(uint32_t i = 0; i < child_cnt; i++)
+                children[i] = lv_obj_get_child(scr, i);
+            for(uint32_t i = 0; i < child_cnt; i++) {
+                if(children[i] != info_label)
+                    lv_obj_delete(children[i]);
+            }
+            free(children);
+        }
     }
 
-    scene_parent = lv_obj_create(lv_screen_active());
+    scene_parent = lv_obj_create(scr);
     lv_obj_set_size(scene_parent, lv_pct(100), lv_pct(100));
     lv_obj_set_pos(scene_parent, 0, 30);
     lv_obj_set_style_bg_opa(scene_parent, LV_OPA_TRANSP, 0);
