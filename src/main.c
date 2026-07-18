@@ -27,6 +27,7 @@
 #include "src/simple_button.h"
 #include "src/simple_button_style.h"
 #include "src/simple_anim.h"
+#include "src/evgpu_benchmark.h"
 #if LV_USE_DEMO_STRESS || LV_USE_DEMO_BENCHMARK || LV_USE_DEMO_RENDER || LV_USE_DEMO_VECTOR_GRAPHIC || LV_USE_DEMO_GLTF || LV_USE_DEMO_3DVIEWPORT || LV_USE_DEMO_3DSCENE || LV_USE_DEMO_3DVIEW
 #include "lvgl/demos/lv_demos.h"
 #endif
@@ -211,6 +212,8 @@ int main(int argc, char ** argv)
     lv_demo_3dscene();
 #elif defined(LVGL_APP_DEMO_3DVIEW) && LV_USE_DEMO_3DVIEW
     lv_demo_3dview();
+#elif defined(LVGL_APP_DEMO_EVGPU_BENCH)
+    evgpu_benchmark_create();
 #else
     simple_button_create();
 #endif

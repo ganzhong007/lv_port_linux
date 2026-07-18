@@ -13,12 +13,15 @@ LV_WAYLAND_WINDOW_DECORATIONS 0
 LV_WAYLAND_DIRECT_EXIT 1
 LV_WAYLAND_USE_EGL 1
 
-# EVGPU GLES2.0 draw unit
+# EVGPU GLES2.0 draw unit (3D pass-through)
 LV_USE_OPENGLES 1
 LV_USE_DRAW_EVGPU 1
 LV_USE_EVGPU_LIB 0
 LV_USE_DRAW_NANOVG 0
 LV_USE_DRAW_OPENGLES 0
+
+# EVGPUGANESH draw unit (Ganesh-style direct GL for 2D tasks)
+LV_USE_DRAW_EVGPUGANESH 1
 LV_USE_NANOVG 0
 
 # 3D widgets needed by 3dscene (viewport + mesh). No light/gltf.
