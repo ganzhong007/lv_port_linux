@@ -11,6 +11,7 @@ SoCloud-win.zip
 *.obj
 *.elf
 /build/
+/build-a53weston/
 /bin/
 
 # Linker output

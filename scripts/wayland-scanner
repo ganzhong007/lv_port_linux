@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# wayland-scanner wrapper for ATK / Petalinux 2020.2 (wayland-client 1.17).
+#
+# Host wayland-scanner (e.g. 1.24) emits wl_proxy_marshal_flags() which does not
+# exist on board libwayland 1.17. Prefer the SDK's aarch64 wayland-scanner 1.17
+# via qemu-user from the Petalinux native sysroot.
+#
+# Put this directory first on PATH (build_a53weston_cross.sh does that).
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PETALINUX_ROOT="${PETALINUX_ROOT:-${PETALINUX:-/opt/petalinux/2020.2}}"
+NATIVE_SYSROOT="${OECORE_NATIVE_SYSROOT:-$PETALINUX_ROOT/sysroots/x86_64-petalinux-linux}"
+TARGET_SYSROOT="${SDKTARGETSYSROOT:-$PETALINUX_ROOT/sysroots/aarch64-xilinx-linux}"
+QEMU="${A53_QEMU_AARCH64:-$NATIVE_SYSROOT/usr/bin/qemu-aarch64}"
+SDK_SCANNER="${A53_WAYLAND_SCANNER:-$TARGET_SYSROOT/usr/bin/wayland-scanner}"
+
+run_sdk_scanner() {
+  # qemu-user needs the target sysroot as the guest library root.
+  exec "$QEMU" -L "$TARGET_SYSROOT" "$SDK_SCANNER" "$@"
+}
+
+if [[ -x "$QEMU" && -x "$SDK_SCANNER" ]]; then
+  run_sdk_scanner "$@"
+fi
+
+# Fallback: first real wayland-scanner on PATH that is not this wrapper.
+while IFS= read -r candidate; do
+  [[ -z "$candidate" ]] && continue
+  cand_dir="$(cd "$(dirname "$candidate")" && pwd)"
+  if [[ "$cand_dir" == "$SCRIPT_DIR" ]]; then
+    continue
+  fi
+  echo "WARNING: Petalinux wayland-scanner 1.17 not found; using $candidate" >&2
+  echo "         Generated code may require libwayland >= 1.20 and fail on ATK." >&2
+  exec "$candidate" "$@"
+done < <(type -aP wayland-scanner 2>/dev/null || true)
+
+echo "ERROR: no usable wayland-scanner found." >&2
+echo "  Expected: $SDK_SCANNER (via $QEMU -L $TARGET_SYSROOT)" >&2
+exit 127

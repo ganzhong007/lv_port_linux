@@ -1,0 +1,62 @@
+# ATK-MPSoC (Cortex-A53) + Weston Wayland SHM — for simple_button / board bring-up.
+# Cross-build with: DEMO=simple_button ./scripts/build_a53weston_cross.sh
+# See docs/atk_a53_simple_button.md
+
+LV_COLOR_DEPTH 16
+
+# Board-friendly refresh (avoid REFR_PERIOD=1 pegging the A53)
+LV_DEF_REFR_PERIOD 16
+
+# drivers: Wayland client + SHM (no EGL / GPU)
+LV_USE_WAYLAND 1
+LV_WAYLAND_WINDOW_DECORATIONS 0
+LV_WAYLAND_DIRECT_EXIT 1
+LV_WAYLAND_USE_EGL 0
+LV_WAYLAND_USE_G2D 0
+
+# Software draw only
+LV_USE_DRAW_SW 1
+LV_USE_OPENGLES 0
+LV_USE_DRAW_OPENGLES 0
+LV_USE_DRAW_NANOVG 0
+LV_USE_NANOVG 0
+LV_USE_DRAW_EVGPU 0
+
+# Input via compositor; no libevdev on the image required
+LV_USE_EVDEV 0
+LV_USE_LIBINPUT 0
+
+# Keep build lean for board bring-up (simple_button is the port app demo)
+LV_BUILD_EXAMPLES 0
+LV_BUILD_DEMOS 0
+
+# Logging + FPS for board debug
+LV_USE_LOG 1
+LV_LOG_LEVEL LV_LOG_LEVEL_INFO
+LV_LOG_PRINTF 1
+
+LV_USE_SYSMON 1
+LV_USE_PERF_MONITOR 1
+LV_USE_PERF_MONITOR_LOG_MODE 1
+LV_SYSMON_PROC_IDLE_AVAILABLE 1
+
+# Assert handler
+LV_ASSERT_HANDLER_INCLUDE <assert.h>
+LV_ASSERT_HANDLER assert(0);
+
+# FS support
+LV_USE_FS_STDIO 1
+LV_FS_DEFAULT_DRIVER_LETTER 'A'
+LV_FS_STDIO_LETTER 'A'
+
+# Stdlib
+LV_USE_STDLIB_MALLOC LV_STDLIB_CLIB
+LV_USE_STDLIB_STRING LV_STDLIB_CLIB
+LV_USE_STDLIB_SPRINTF LV_STDLIB_CLIB
+
+# Common fonts used by simple_button
+LV_FONT_MONTSERRAT_14 1
+LV_FONT_MONTSERRAT_16 1
+LV_FONT_MONTSERRAT_18 1
+LV_FONT_MONTSERRAT_20 1
+LV_FONT_MONTSERRAT_24 1
