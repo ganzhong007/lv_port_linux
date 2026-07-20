@@ -21,6 +21,11 @@
 
 #include "demo_g3_showcase.h"
 
+/* 全屏暗角/边条：1=开启，0=关闭（EVGPU 上径向 vignette 曾 cover 掉卡片）。 */
+#ifndef G3_SHOWCASE_USE_VIGNETTE
+#define G3_SHOWCASE_USE_VIGNETTE 0
+#endif
+
 /* ================= 外观配色 ================= */
 #define G_GREEN     0x45FF8Au   /* 磷光绿 */
 #define OP_BRIGHT   255
@@ -234,6 +239,7 @@ static void build_world(lv_obj_t * root)
 }
 
 /* 镜片暗角：四边半透明黑条（不用全屏径向渐变，避免 EVGPU cover / 单 FILL 问题）。 */
+#if G3_SHOWCASE_USE_VIGNETTE
 static void build_vignette(lv_obj_t * root)
 {
     int32_t hor = lv_display_get_horizontal_resolution(lv_display_get_default());
@@ -264,6 +270,7 @@ static void build_vignette(lv_obj_t * root)
         lv_obj_remove_flag(b, LV_OBJ_FLAG_CLICKABLE);
     }
 }
+#endif /* G3_SHOWCASE_USE_VIGNETTE */
 
 /* 「world」卡片里带文字标签的小径向渐变色卡。 */
 static void grad_swatch(lv_obj_t * parent, uint32_t c0, uint32_t c1, const char * name)
@@ -393,7 +400,7 @@ static void build_card_world(lv_obj_t * parent, int32_t x, int32_t y, int32_t w,
     place_card(card, x, y, w, h);
 
     label(card, "WORLD", FONT_MD, OP_BRIGHT);
-    label(card, "radial gradient + lens vignette", FONT_SM, OP_DIM);
+    label(card, "radial gradient samples", FONT_SM, OP_DIM);
 
     lv_obj_t * grow = plain(card);
     lv_obj_set_flex_grow(grow, 1);
@@ -406,7 +413,7 @@ static void build_card_world(lv_obj_t * parent, int32_t x, int32_t y, int32_t w,
 
     grad_swatch(row, 0x243444, 0x05090e, "world");
     grad_swatch(row, 0x0d3b24, 0x020806, "glow");
-    grad_swatch(row, 0x000000, 0x000000, "vignette");
+    grad_swatch(row, 0x000000, 0x000000, "fade");
 }
 
 /* ================= 技巧 3：HOVER 卡片 ================= */
@@ -636,7 +643,7 @@ void demo_g3_showcase_init(void)
     lv_obj_t * h = label(header, "G3  UX  SHOWCASE",
                          (ver >= 600) ? FONT_LG : FONT_MD, OP_BRIGHT);
     lv_obj_set_style_text_letter_space(h, 4, 0);
-    label(header, "world + edge vignette — no boot", FONT_SM, OP_DIM);
+    label(header, "player  -  world  -  hover  -  boot  -  layout", FONT_SM, OP_DIM);
 
     int32_t grid_y = pad_top + header_h + gap;
     int32_t grid_h = ver - grid_y - pad_bot;
@@ -651,6 +658,7 @@ void demo_g3_showcase_init(void)
     build_card_hover (scr, pad_x,               grid_y + ch + gap,    cw, ch);
     build_card_boot  (scr, pad_x + cw + gap,    grid_y + ch + gap,    cw, ch);
 
-    /* Step 2: add vignette (still no boot). */
+#if G3_SHOWCASE_USE_VIGNETTE
     build_vignette(scr);
+#endif
 }
