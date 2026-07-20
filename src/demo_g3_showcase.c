@@ -21,9 +21,33 @@
 
 #include "demo_g3_showcase.h"
 
+#include <stdlib.h>
+
 /* 全屏暗角/边条：1=开启，0=关闭（EVGPU 上径向 vignette 曾 cover 掉卡片）。 */
 #ifndef G3_SHOWCASE_USE_VIGNETTE
 #define G3_SHOWCASE_USE_VIGNETTE 0
+#endif
+
+/* Freeze player/boot animations for pixel-stable EVGPU vs C_R_T screenshots. */
+#ifndef G3_SHOWCASE_NO_ANIM
+#define G3_SHOWCASE_NO_ANIM 1
+#endif
+
+#if G3_SHOWCASE_NO_ANIM
+static void dump_kick_cb(lv_timer_t * t)
+{
+    /* Keep dirtying the screen a few times so LVGL_GL_DUMP can fire after
+     * animations are frozen (otherwise end_frame may only run once). */
+    lv_obj_invalidate(lv_screen_active());
+    int * n = lv_timer_get_user_data(t);
+    if(n) {
+        (*n)++;
+        if(*n >= 12) {
+            lv_timer_delete(t);
+            lv_free(n);
+        }
+    }
+}
 #endif
 
 /* ================= 外观配色 ================= */
@@ -338,6 +362,10 @@ static void build_card_player(lv_obj_t * parent, int32_t x, int32_t y, int32_t w
     lv_obj_remove_flag(dot, LV_OBJ_FLAG_SCROLLABLE);
     label(live, "LIVE", FONT_SM, OP_DIM);
 
+#if G3_SHOWCASE_NO_ANIM
+    /* Static mid-breath: full green dot. */
+    lv_obj_set_style_bg_opa(dot, LV_OPA_COVER, 0);
+#else
     /* 呼吸灯：透明度 255<->70，1.7s 往返一圈，无限循环，ease-in-out。 */
     lv_anim_t ba;
     lv_anim_init(&ba);
@@ -349,15 +377,17 @@ static void build_card_player(lv_obj_t * parent, int32_t x, int32_t y, int32_t w
     lv_anim_set_repeat_count(&ba, LV_ANIM_REPEAT_INFINITE);
     lv_anim_set_path_cb(&ba, lv_anim_path_ease_in_out);
     lv_anim_start(&ba);
+#endif
 
     /* 弹性空白，把均衡器顶到卡片底部。 */
     lv_obj_t * grow = plain(card);
     lv_obj_set_flex_grow(grow, 1);
     lv_obj_set_width(grow, lv_pct(100));
 
-    /* 均衡器：5 根竖条，各自以不同节奏做无限高度往返。 */
+    /* 均衡器：5 根竖条；静态模式用固定高度，便于截图像素对比。 */
     static const int32_t eq_dur[5]   = { 900, 750, 1050, 850, 900 };
     static const int32_t eq_delay[5] = { 0, 180, 360, 100, 280 };
+    static const int32_t eq_h_static[5] = { 28, 64, 84, 48, 36 };
 
     lv_obj_t * eq = plain(card);
     lv_obj_set_size(eq, LV_SIZE_CONTENT, 90);
@@ -368,7 +398,11 @@ static void build_card_player(lv_obj_t * parent, int32_t x, int32_t y, int32_t w
     for (int32_t i = 0; i < 5; i++) {
         lv_obj_t * bar = lv_obj_create(eq);
         lv_obj_set_width(bar, 9);
+#if G3_SHOWCASE_NO_ANIM
+        lv_obj_set_height(bar, eq_h_static[i]);
+#else
         lv_obj_set_height(bar, 12);
+#endif
         lv_obj_set_style_radius(bar, 3, 0);
         lv_obj_set_style_bg_color(bar, lv_color_hex(G_GREEN), 0);
         lv_obj_set_style_bg_opa(bar, OP_BRIGHT, 0);
@@ -378,6 +412,7 @@ static void build_card_player(lv_obj_t * parent, int32_t x, int32_t y, int32_t w
         lv_obj_set_style_shadow_opa(bar, 90, 0);
         lv_obj_remove_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
 
+#if !G3_SHOWCASE_NO_ANIM
         lv_anim_t a;
         lv_anim_init(&a);
         lv_anim_set_var(&a, bar);
@@ -389,6 +424,10 @@ static void build_card_player(lv_obj_t * parent, int32_t x, int32_t y, int32_t w
         lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
         lv_anim_set_path_cb(&a, lv_anim_path_ease_in_out);
         lv_anim_start(&a);
+#else
+        LV_UNUSED(eq_dur);
+        LV_UNUSED(eq_delay);
+#endif
     }
 }
 
@@ -660,5 +699,15 @@ void demo_g3_showcase_init(void)
 
 #if G3_SHOWCASE_USE_VIGNETTE
     build_vignette(scr);
+#endif
+
+#if G3_SHOWCASE_NO_ANIM
+    if(getenv("LVGL_GL_DUMP")) {
+        int * n = lv_malloc(sizeof(int));
+        if(n) {
+            *n = 0;
+            lv_timer_create(dump_kick_cb, 80, n);
+        }
+    }
 #endif
 }
