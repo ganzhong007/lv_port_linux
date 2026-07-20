@@ -2,6 +2,7 @@
 #include "lvgl/lvgl.h"
 #include "lvgl/lvgl_private.h"
 #include "demo_g3_showcase.h"
+#include <stdlib.h>
 
 #if LV_USE_PERF_MONITOR
 
@@ -19,7 +20,7 @@ typedef struct {
 } scene_dsc_t;
 
 static scene_dsc_t scenes[MAX_SCENES];
-static int scene_act = 0;
+static int scene_act = 12; /* Only run G3_SHOWCASE (index 12) */
 static lv_timer_t * scene_timer = NULL;
 static lv_obj_t * scene_parent = NULL;
 static lv_obj_t * info_label = NULL;
@@ -587,14 +588,13 @@ static void next_scene_timer_cb(lv_timer_t * timer)
 void evgpu_benchmark_create(void)
 {
     init_scenes();
-    scene_act = 0;
 
     lv_obj_t * scr = lv_screen_active();
 
     info_label = lv_label_create(scr);
     lv_obj_set_pos(info_label, 0, 0);
     lv_obj_set_size(info_label, lv_pct(100), 30);
-    lv_label_set_text(info_label, "Starting...");
+    lv_label_set_text(info_label, "G3_SHOWCASE");
 
     scene_parent = lv_obj_create(scr);
     lv_obj_set_size(scene_parent, lv_pct(100), lv_pct(100));
@@ -606,10 +606,9 @@ void evgpu_benchmark_create(void)
     lv_display_t * disp = lv_display_get_default();
     lv_subject_add_observer_obj(&disp->perf_sysmon_backend.subject, sysmon_perf_observer_cb, NULL, NULL);
 
-    scenes[0].create_cb(scene_parent);
-
-    scene_timer = lv_timer_create(next_scene_timer_cb, SCENE_TIME_MS, NULL);
-    lv_timer_set_repeat_count(scene_timer, 1);
+    /* Only run G3_SHOWCASE (scene_act = 12). Skip scene_timer entirely. */
+    scenes[scene_act].create_cb(scene_parent);
+    scene_timer = NULL;
 }
 
 #else

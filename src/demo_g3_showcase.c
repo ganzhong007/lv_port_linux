@@ -27,8 +27,11 @@
 #define OP_DIM      120
 #define OP_FAINT    60
 
-#define SCREEN_W    1200
-#define SCREEN_H    720
+#define SCREEN_W    g_screen_w
+#define SCREEN_H    g_screen_h
+
+static int32_t g_screen_w = 1200;
+static int32_t g_screen_h = 720;
 
 /* 本工程可用字体：montserrat 14/20/22/24/26/30/36/40。 */
 #define FONT_SM     (&lv_font_montserrat_14)
@@ -172,8 +175,13 @@ static void ambient_glow(lv_obj_t * root, int32_t cx, int32_t cy, int32_t radius
     g->stops[0].color = lv_color_hex(color); g->stops[0].opa = opa; g->stops[0].frac = 0;
     g->stops[1].color = lv_color_hex(color); g->stops[1].opa = 0;   g->stops[1].frac = 255;
 
+    int32_t hor = lv_display_get_horizontal_resolution(lv_display_get_default());
+    int32_t ver = lv_display_get_vertical_resolution(lv_display_get_default());
+    if(hor <= 0) hor = g_screen_w;
+    if(ver <= 0) ver = g_screen_h;
+
     lv_obj_t * o = lv_obj_create(root);
-    lv_obj_set_size(o, SCREEN_W, SCREEN_H);
+    lv_obj_set_size(o, hor, ver);
     lv_obj_align(o, LV_ALIGN_CENTER, 0, 0);
     lv_obj_set_style_border_width(o, 0, 0);
     lv_obj_set_style_radius(o, 0, 0);
@@ -188,18 +196,27 @@ static void ambient_glow(lv_obj_t * root, int32_t cx, int32_t cy, int32_t radius
  * 再叠加暖光 + 冷光两层环境光斑，还原原型那种蓝灰辉光感。 */
 static void build_world(lv_obj_t * root)
 {
+    int32_t hor = lv_display_get_horizontal_resolution(lv_display_get_default());
+    int32_t ver = lv_display_get_vertical_resolution(lv_display_get_default());
+    if(hor <= 0) hor = 800;
+    if(ver <= 0) ver = 480;
+
     static lv_grad_dsc_t grad;
     lv_obj_t * world = lv_obj_create(root);
     lv_memzero(&grad, sizeof(grad));
-    /* 近黑底色：圆心(600,58)=(50%,8%)，半径 792px（到 (600,850)），对应 HTML circle 792px */
-    lv_grad_radial_init(&grad, 600, 58, 600, 850, LV_GRAD_EXTEND_PAD);
+    /* Bug fix (2026-07-19): use % of display so the radial gradient
+     * is centered correctly on 800x480 (Orangepi) as well as 1200x720. */
+    int32_t cx1 = hor / 2;
+    int32_t cy1 = ver * 8 / 100;
+    int32_t r1  = ver * 118 / 100;     /* ~ 567px on 480h, ~ 850px on 720h */
+    lv_grad_radial_init(&grad, cx1, cy1, cx1, cy1 + r1, LV_GRAD_EXTEND_PAD);
     grad.stops_count    = 4;
     grad.stops[0].color = lv_color_hex(0x11161c); grad.stops[0].opa = LV_OPA_COVER; grad.stops[0].frac = 0;
     grad.stops[1].color = lv_color_hex(0x0a0d11); grad.stops[1].opa = LV_OPA_COVER; grad.stops[1].frac = 97;
     grad.stops[2].color = lv_color_hex(0x05070a); grad.stops[2].opa = LV_OPA_COVER; grad.stops[2].frac = 179;
     grad.stops[3].color = lv_color_hex(0x020304); grad.stops[3].opa = LV_OPA_COVER; grad.stops[3].frac = 255;
 
-    lv_obj_set_size(world, SCREEN_W, SCREEN_H);
+    lv_obj_set_size(world, hor, ver);
     lv_obj_align(world, LV_ALIGN_CENTER, 0, 0);
     lv_obj_set_style_border_width(world, 0, 0);
     lv_obj_set_style_radius(world, 0, 0);
@@ -209,38 +226,43 @@ static void build_world(lv_obj_t * root)
     lv_obj_remove_flag(world, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_remove_flag(world, LV_OBJ_FLAG_CLICKABLE);
 
-    /* 暖光(右上 864,216) + 冷光(左下 360,691)，半径均 324px，对应 #world::before。
-     * 864=72%*1200，216=30%*720，360=30%*1200，691=96%*720。 */
-    ambient_glow(root, 864, 216, 324, 0x786e5a, 46);
-    ambient_glow(root, 360, 691, 324, 0x283c50, 46);
+    /* 暖光(右上 72%, 30%) + 冷光(左下 30%, 96%)，半径 45% of vertical.
+     * 864=72%*1200, 216=30%*720, 360=30%*1200, 691=96%*720。 */
+    int32_t glow_r = ver * 45 / 100;
+    ambient_glow(root, hor * 72 / 100, ver * 30 / 100, glow_r, 0x786e5a, 46);
+    ambient_glow(root, hor * 30 / 100, ver * 96 / 100, glow_r, 0x283c50, 46);
 }
 
-/* 镜片暗角：中心透明 -> 边缘变黑，盖在所有内容之上。 */
+/* 镜片暗角：四边半透明黑条（不用全屏径向渐变，避免 EVGPU cover / 单 FILL 问题）。 */
 static void build_vignette(lv_obj_t * root)
 {
-    static lv_grad_dsc_t grad;
-    lv_obj_t *           v = lv_obj_create(root);
+    int32_t hor = lv_display_get_horizontal_resolution(lv_display_get_default());
+    int32_t ver = lv_display_get_vertical_resolution(lv_display_get_default());
+    if(hor <= 0) hor = 800;
+    if(ver <= 0) ver = 480;
 
-    lv_memzero(&grad, sizeof(grad));
-    /* 圆形径向暗角：圆心(600,360)=(50%,50%)，半径 700px（到 (600,1060)），
-     * 对应 HTML circle 700px。半径≈画面到四角的距离(≈700px)，最暗色标正好落在四角；
-     * 半径过大会让四角只落到中间色标，看起来「没有阴影」。 */
-    lv_grad_radial_init(&grad, 600, 360, 600, 1060, LV_GRAD_EXTEND_PAD);
-    grad.stops_count = 3;
-    grad.stops[0].color = lv_color_hex(0x000000); grad.stops[0].opa = LV_OPA_TRANSP; grad.stops[0].frac = 118;
-    grad.stops[1].color = lv_color_hex(0x000000); grad.stops[1].opa = 140;           grad.stops[1].frac = 209;
-    grad.stops[2].color = lv_color_hex(0x000000); grad.stops[2].opa = 235;           grad.stops[2].frac = 255;
+    int32_t band = LV_MAX(24, ver * 12 / 100);
 
-    lv_obj_set_size(v, SCREEN_W, SCREEN_H);
-    lv_obj_align(v, LV_ALIGN_CENTER, 0, 0);
-    lv_obj_set_style_border_width(v, 0, 0);
-    lv_obj_set_style_radius(v, 0, 0);
-    lv_obj_set_style_pad_all(v, 0, 0);
-    lv_obj_set_style_bg_opa(v, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(v, lv_color_hex(0x000000), 0);
-    lv_obj_set_style_bg_grad(v, &grad, 0);
-    lv_obj_remove_flag(v, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_remove_flag(v, LV_OBJ_FLAG_CLICKABLE);
+    typedef struct { int32_t x, y, w, h; lv_opa_t opa; } band_t;
+    const band_t bands[] = {
+        {0, 0, hor, band, 180},                 /* top */
+        {0, ver - band, hor, band, 200},         /* bottom */
+        {0, 0, band, ver, 160},                  /* left */
+        {hor - band, 0, band, ver, 160},         /* right */
+    };
+
+    for(unsigned i = 0; i < sizeof(bands) / sizeof(bands[0]); i++) {
+        lv_obj_t * b = lv_obj_create(root);
+        lv_obj_set_pos(b, bands[i].x, bands[i].y);
+        lv_obj_set_size(b, bands[i].w, bands[i].h);
+        lv_obj_set_style_bg_color(b, lv_color_hex(0x000000), 0);
+        lv_obj_set_style_bg_opa(b, bands[i].opa, 0);
+        lv_obj_set_style_border_width(b, 0, 0);
+        lv_obj_set_style_radius(b, 0, 0);
+        lv_obj_set_style_pad_all(b, 0, 0);
+        lv_obj_remove_flag(b, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_remove_flag(b, LV_OBJ_FLAG_CLICKABLE);
+    }
 }
 
 /* 「world」卡片里带文字标签的小径向渐变色卡。 */
@@ -275,10 +297,21 @@ static void grad_swatch(lv_obj_t * parent, uint32_t c0, uint32_t c1, const char 
 
 /* ================= 技巧 1：PLAYER 卡片 ================= */
 
-static void build_card_player(lv_obj_t * grid)
+static void place_card(lv_obj_t * card, int32_t x, int32_t y, int32_t w, int32_t h)
 {
-    lv_obj_t * card = make_card(grid);
-    lv_obj_set_grid_cell(card, LV_GRID_ALIGN_STRETCH, 0, 1, LV_GRID_ALIGN_STRETCH, 0, 1);
+    lv_obj_set_pos(card, x, y);
+    lv_obj_set_size(card, w, h);
+    /* Compact padding on small panels (e.g. Orangepi 800x480). */
+    if(h < 220) {
+        lv_obj_set_style_pad_all(card, 10, 0);
+        lv_obj_set_style_pad_row(card, 6, 0);
+    }
+}
+
+static void build_card_player(lv_obj_t * parent, int32_t x, int32_t y, int32_t w, int32_t h)
+{
+    lv_obj_t * card = make_card(parent);
+    place_card(card, x, y, w, h);
 
     label(card, "PLAYER", FONT_MD, OP_BRIGHT);
     label(card, "bars + breathing dot", FONT_SM, OP_DIM);
@@ -354,10 +387,10 @@ static void build_card_player(lv_obj_t * grid)
 
 /* ================= 技巧 2：WORLD 卡片 ================= */
 
-static void build_card_world(lv_obj_t * grid)
+static void build_card_world(lv_obj_t * parent, int32_t x, int32_t y, int32_t w, int32_t h)
 {
-    lv_obj_t * card = make_card(grid);
-    lv_obj_set_grid_cell(card, LV_GRID_ALIGN_STRETCH, 1, 1, LV_GRID_ALIGN_STRETCH, 0, 1);
+    lv_obj_t * card = make_card(parent);
+    place_card(card, x, y, w, h);
 
     label(card, "WORLD", FONT_MD, OP_BRIGHT);
     label(card, "radial gradient + lens vignette", FONT_SM, OP_DIM);
@@ -378,10 +411,10 @@ static void build_card_world(lv_obj_t * grid)
 
 /* ================= 技巧 3：HOVER 卡片 ================= */
 
-static void build_card_hover(lv_obj_t * grid)
+static void build_card_hover(lv_obj_t * parent, int32_t x, int32_t y, int32_t w, int32_t h)
 {
-    lv_obj_t * card = make_card(grid);
-    lv_obj_set_grid_cell(card, LV_GRID_ALIGN_STRETCH, 0, 1, LV_GRID_ALIGN_STRETCH, 1, 1);
+    lv_obj_t * card = make_card(parent);
+    place_card(card, x, y, w, h);
 
     label(card, "HOVER", FONT_MD, OP_BRIGHT);
     label(card, "move the mouse over any tile", FONT_SM, OP_DIM);
@@ -397,7 +430,8 @@ static void build_card_hover(lv_obj_t * grid)
 
     for (int32_t i = 0; i < 3; i++) {
         lv_obj_t * mini = lv_obj_create(row);
-        lv_obj_set_size(mini, 96, 96);
+        int32_t mini_sz = (h < 220) ? 56 : 96;
+        lv_obj_set_size(mini, mini_sz, mini_sz);
         lv_obj_set_style_radius(mini, 14, 0);
         lv_obj_set_style_bg_color(mini, lv_color_hex(G_GREEN), 0);
         lv_obj_set_style_bg_opa(mini, 16, 0);
@@ -443,11 +477,19 @@ static void run_boot(void)
         return;                 /* 正在播放，忽略 */
     }
 
+    int32_t hor = lv_display_get_horizontal_resolution(lv_display_get_default());
+    int32_t ver = lv_display_get_vertical_resolution(lv_display_get_default());
+    if(hor <= 0) hor = 800;
+    if(ver <= 0) ver = 480;
+
     lv_obj_t * boot = lv_obj_create(lv_layer_top());
-    lv_obj_set_size(boot, SCREEN_W, SCREEN_H);
+    lv_obj_set_size(boot, hor, ver);
     lv_obj_align(boot, LV_ALIGN_CENTER, 0, 0);
     lv_obj_set_style_bg_color(boot, lv_color_hex(0x000000), 0);
-    lv_obj_set_style_bg_opa(boot, LV_OPA_COVER, 0);
+    /* Bug fix (2026-07-19): boot's BLACK OPAQUE bg was hiding the entire
+     * screen layer's G3 content. Make bg fully transparent; the centered
+     * mark/title/track widgets inside are visible on their own. */
+    lv_obj_set_style_bg_opa(boot, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(boot, 0, 0);
     lv_obj_set_style_radius(boot, 0, 0);
     lv_obj_set_flex_flow(boot, LV_FLEX_FLOW_COLUMN);
@@ -522,10 +564,10 @@ static void boot_btn_cb(lv_event_t * e)
     run_boot();
 }
 
-static void build_card_boot(lv_obj_t * grid)
+static void build_card_boot(lv_obj_t * parent, int32_t x, int32_t y, int32_t w, int32_t h)
 {
-    lv_obj_t * card = make_card(grid);
-    lv_obj_set_grid_cell(card, LV_GRID_ALIGN_STRETCH, 1, 1, LV_GRID_ALIGN_STRETCH, 1, 1);
+    lv_obj_t * card = make_card(parent);
+    place_card(card, x, y, w, h);
 
     label(card, "BOOT", FONT_MD, OP_BRIGHT);
     label(card, "progress + status text + fade out", FONT_SM, OP_DIM);
@@ -565,52 +607,50 @@ void demo_g3_showcase_init(void)
     };
     lv_style_transition_dsc_init(&g_hover_trans, hover_props, lv_anim_path_ease_out, 220, 0, NULL);
 
+    int32_t hor = lv_display_get_horizontal_resolution(lv_display_get_default());
+    int32_t ver = lv_display_get_vertical_resolution(lv_display_get_default());
+    if(hor <= 0) hor = 800;
+    if(ver <= 0) ver = 480;
+    g_screen_w = hor;
+    g_screen_h = ver;
+
     lv_obj_t * scr = lv_screen_active();
     lv_obj_set_style_bg_color(scr, lv_color_hex(0x02040a), 0);
     lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
     lv_obj_remove_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
 
-    /* 技巧 2：world 渐变铺在最底层。 */
+    /* Step 1: only add world back (no vignette / no boot). */
     build_world(scr);
 
-    /* 技巧 5（布局）：纵向 flex——标题栏，然后是 2x2 网格。 */
-    lv_obj_t * page = plain(scr);
-    lv_obj_set_size(page, SCREEN_W, SCREEN_H);
-    lv_obj_align(page, LV_ALIGN_CENTER, 0, 0);
-    lv_obj_set_style_pad_hor(page, 90, 0);
-    lv_obj_set_style_pad_top(page, 48, 0);
-    lv_obj_set_style_pad_bottom(page, 64, 0);
-    lv_obj_set_style_pad_row(page, 28, 0);
-    lv_obj_set_flex_flow(page, LV_FLEX_FLOW_COLUMN);
+    int32_t pad_x = LV_MAX(8, hor * 5 / 100);
+    int32_t pad_top = LV_MAX(6, ver * 4 / 100);
+    int32_t pad_bot = LV_MAX(6, ver * 5 / 100);
+    int32_t gap = LV_MAX(6, LV_MIN(hor, ver) * 3 / 100);
+    int32_t header_h = (ver >= 600) ? 70 : 48;
 
-    lv_obj_t * header = plain(page);
-    lv_obj_set_size(header, lv_pct(100), LV_SIZE_CONTENT);
+    lv_obj_t * header = plain(scr);
+    lv_obj_set_size(header, hor - 2 * pad_x, header_h);
+    lv_obj_set_pos(header, pad_x, pad_top);
     lv_obj_set_flex_flow(header, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(header, 4, 0);
-    lv_obj_t * h = label(header, "G3  UX  SHOWCASE", FONT_LG, OP_BRIGHT);
+    lv_obj_set_style_pad_row(header, 2, 0);
+    lv_obj_t * h = label(header, "G3  UX  SHOWCASE",
+                         (ver >= 600) ? FONT_LG : FONT_MD, OP_BRIGHT);
     lv_obj_set_style_text_letter_space(h, 4, 0);
-    label(header, "player  -  world  -  hover  -  boot  -  layout", FONT_SM, OP_DIM);
+    label(header, "world + edge vignette — no boot", FONT_SM, OP_DIM);
 
-    /* 2x2 网格：两等宽列、两等é+    static const int32_t cols[] = { LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_TEMPLATE_LAST };
-    static const int32_t rows[] = { LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_TEMPLATE_LAST };
+    int32_t grid_y = pad_top + header_h + gap;
+    int32_t grid_h = ver - grid_y - pad_bot;
+    int32_t grid_w = hor - 2 * pad_x;
+    int32_t cw = (grid_w - gap) / 2;
+    int32_t ch = (grid_h - gap) / 2;
+    if(cw < 80) cw = 80;
+    if(ch < 80) ch = 80;
 
-    lv_obj_t * grid = plain(page);
-    lv_obj_set_width(grid, lv_pct(100));
-    lv_obj_set_flex_grow(grid, 1);
-    lv_obj_set_style_pad_column(grid, 28, 0);
-    lv_obj_set_style_pad_row(grid, 28, 0);
-    lv_obj_set_style_grid_column_dsc_array(grid, cols, 0);
-    lv_obj_set_style_grid_row_dsc_array(grid, rows, 0);
-    lv_obj_set_layout(grid, LV_LAYOUT_GRID);
+    build_card_player(scr, pad_x,               grid_y,               cw, ch);
+    build_card_world (scr, pad_x + cw + gap,    grid_y,               cw, ch);
+    build_card_hover (scr, pad_x,               grid_y + ch + gap,    cw, ch);
+    build_card_boot  (scr, pad_x + cw + gap,    grid_y + ch + gap,    cw, ch);
 
-    build_card_player(grid);
-    build_card_world(grid);
-    build_card_hover(grid);
-    build_card_boot(grid);
-
-    /* 技巧 2：暗角盖在卡片之上。 */
+    /* Step 2: add vignette (still no boot). */
     build_vignette(scr);
-
-    /* 技巧 4：启动时播放一次开机动画。 */
-    run_boot();
 }

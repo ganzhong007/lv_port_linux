@@ -360,9 +360,8 @@ if(CONFIG_LV_USE_DRAW_EVGPU OR CONFIG_LV_USE_DRAW_EVGPUGANESH OR CONFIG_LV_USE_D
 endif()
 
 add_executable(lvglsim src/main.c src/simple_button.c src/simple_button_shot.c src/simple_button_style.c src/simple_anim.c src/evgpu_benchmark.c src/demo_g3_os.c src/demo_g3_showcase.c)
-
 option(LVGL_SIMPLE_BUTTON_TRACE "Enable layer trace logs for the simple button walkthrough" ON)
-set(LVGL_APP_DEMO "simple_button" CACHE STRING "App entry: simple_button, simple_button_style, simple_anim, stress, benchmark, render, vector_graphic, gltf, 3dviewport, 3dscene, 3dview, evgpu_bench, g3_showcase")
+set(LVGL_APP_DEMO "g3_showcase" CACHE STRING "App entry: simple_button, simple_button_style, simple_anim, stress, benchmark, render, vector_graphic, gltf, 3dviewport, 3dscene, 3dview, evgpu_bench, g3_showcase")
 set(LV_DEMO_STRESS_DRAW_MULT "1" CACHE STRING "Stress demo drawable count multiplier (1=stock)")
 
 if(LVGL_APP_DEMO STREQUAL "stress")
