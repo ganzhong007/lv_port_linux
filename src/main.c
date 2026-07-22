@@ -49,6 +49,62 @@ static char * selected_backend;
 /* Global simulator settings, defined in lv_linux_backend.c */
 extern simulator_settings_t settings;
 
+#if LV_USE_SNAPSHOT
+/**
+ * One-shot screen dump via snapshot (SW / CPU buffer backends).
+ * Set LVGL_BUF_DUMP=/path/out.ppm — fires after a few refresh ticks.
+ */
+static void buf_dump_timer_cb(lv_timer_t * t)
+{
+    static int ticks;
+    const char * path = getenv("LVGL_BUF_DUMP");
+    if(path == NULL) {
+        lv_timer_delete(t);
+        return;
+    }
+
+    lv_obj_invalidate(lv_screen_active());
+    ticks++;
+    if(ticks < 8) return;
+
+    lv_draw_buf_t * snap = lv_snapshot_take(lv_screen_active(), LV_COLOR_FORMAT_ARGB8888);
+    if(snap == NULL || snap->data == NULL) {
+        fprintf(stderr, "LVGL_BUF_DUMP: snapshot failed\n");
+        lv_timer_delete(t);
+        return;
+    }
+
+    const uint32_t w = snap->header.w;
+    const uint32_t h = snap->header.h;
+    const uint32_t stride = snap->header.stride;
+    FILE * f = fopen(path, "wb");
+    if(f) {
+        fprintf(f, "P6\n%u %u\n255\n", w, h);
+        for(uint32_t y = 0; y < h; y++) {
+            const uint8_t * row = snap->data + (size_t)y * stride;
+            for(uint32_t x = 0; x < w; x++) {
+                /* ARGB8888 stored as B,G,R,A on little-endian LV_COLOR_FORMAT_ARGB8888 */
+                fputc(row[x * 4 + 2], f); /* R */
+                fputc(row[x * 4 + 1], f); /* G */
+                fputc(row[x * 4 + 0], f); /* B */
+            }
+        }
+        fclose(f);
+        fprintf(stderr, "LVGL_BUF_DUMP wrote %s (%ux%u)\n", path, w, h);
+    }
+    lv_draw_buf_destroy(snap);
+    lv_timer_delete(t);
+}
+#endif
+
+/** Keep the screen dirty so LVGL_GL_DUMP (C_R_T/EVGPU) can count end_frames. */
+static void gl_dump_kick_timer_cb(lv_timer_t * t)
+{
+    LV_UNUSED(t);
+    if(getenv("LVGL_GL_DUMP") == NULL) return;
+    lv_obj_invalidate(lv_screen_active());
+}
+
 
 /**
  * @brief Print LVGL version
@@ -220,6 +276,16 @@ int main(int argc, char ** argv)
 #else
     simple_button_create();
 #endif
+
+    /* Optional SW/CPU buffer dump for backend compares: LVGL_BUF_DUMP=/tmp/out.ppm */
+#if LV_USE_SNAPSHOT
+    if(getenv("LVGL_BUF_DUMP")) {
+        lv_timer_create(buf_dump_timer_cb, 100, NULL);
+    }
+#endif
+    if(getenv("LVGL_GL_DUMP")) {
+        lv_timer_create(gl_dump_kick_timer_cb, 50, NULL);
+    }
 
     /* Enter the run loop of the selected backend */
     driver_backends_run_loop();
